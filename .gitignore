@@ -1,0 +1,25 @@
+# Gradle / build
+.gradle/
+build/
+**/build/
+
+# Archivos locales (rutas de tu PC)
+local.properties
+
+# Android Studio
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Firmas: NUNCA subir
+*.jks
+*.keystore
+keystore.properties
+
+# APK/AAB: van en Releases, no en el repo
+*.apk
+*.aab
+
+.DS_Store
