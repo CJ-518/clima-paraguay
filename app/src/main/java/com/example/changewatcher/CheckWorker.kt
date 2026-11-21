@@ -25,13 +25,15 @@ import java.util.Locale
  * CheckWorker.kt
  *
  * Es el "motor" de la app. WorkManager lo ejecuta en segundo plano, de forma periódica
- * (cuando el monitoreo está activado) o una sola vez (botón "Revisar ahora").
+ * (cuando el monitoreo está activado) o una sola vez (botón "Revisar ahora" o al abrir la app).
  *
  * Flujo de cada revisión:
  *  1. Lee los ajustes y decide si debe correr.
  *  2. Descarga la página de avisos y la convierte en texto.
  *  3. Si hay un aviso, recorta la parte relevante y busca los departamentos elegidos.
- *  4. Si hay coincidencia y el aviso es nuevo (o la revisión es manual), guarda el texto y notifica.
+ *  4. Si hay un aviso nuevo (o la revisión es manual), guarda el texto, mencione o no los departamentos elegidos.
+ *     Solo notifica si menciona alguno de los elegidos y la app NO está en primer plano
+ *     (si está abierta, el usuario ya ve el aviso).
  *  5. Guarda un mensaje de estado que la pantalla principal muestra al usuario.
  */
 class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
@@ -40,17 +42,19 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
      * Ejecuta una revisión completa. Devuelve:
      *  - success: la revisión terminó (haya o no avisos);
      *  - retry: falló una revisión programada, WorkManager la reintenta más tarde;
-     *  - failure: falló una revisión manual, no se reintenta.
+     *  - failure: falló una revisión manual o al abrir la app, no se reintenta.
      */
     override suspend fun doWork(): Result {
         val prefs = Prefs(applicationContext)
         val cfg = prefs.load()
         // Las revisiones manuales ("Revisar ahora") se hacen aunque el monitoreo esté desactivado
         val manual = inputData.getBoolean(KEY_MANUAL, false)
+        // La revisión al abrir la app también corre con el monitoreo desactivado, pero no repite avisos ya guardados
+        val refresh = inputData.getBoolean(KEY_REFRESH, false)
         val time = SimpleDateFormat("d MMM, HH:mm", Locale.forLanguageTag("es-PY")).format(Date())
 
-        // Condiciones para no hacer nada: monitoreo apagado (si no es manual) o sin departamentos elegidos
-        if (!manual && !cfg.enabled) return Result.success()
+        // Condiciones para no hacer nada: monitoreo apagado (si no es manual ni al abrir) o sin departamentos elegidos
+        if (!manual && !refresh && !cfg.enabled) return Result.success()
         if (cfg.departments.isEmpty()) {
             if (manual) prefs.lastStatus = "Revisión del $time: selecciona al menos un departamento"
             return Result.success()
@@ -74,22 +78,35 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             }
             val met = affected.isNotEmpty()
 
-            // Las revisiones programadas avisan solo si el aviso es nuevo o cambió (se compara su hash).
-            // Las manuales avisan siempre que haya coincidencia (útil para probar).
+            // El aviso se guarda siempre que haya uno nuevo o cambiado (se compara su hash),
+            // mencione o no los departamentos elegidos. Las revisiones manuales lo guardan siempre.
             val alertHash = section.hashCode().toString()
-            val shouldNotify = met && (manual || alertHash != prefs.lastAlertHash)
+            val shouldSave = hasAlert && section.isNotBlank() && (manual || alertHash != prefs.lastAlertHash)
+            // Se notifica solo si el aviso menciona departamentos elegidos y todavía no se notificó este aviso
+            val shouldNotify = met && (shouldSave || alertHash != prefs.lastNotifiedHash)
 
             var snapshotName = ""
-            var notified = true
-            if (shouldNotify) {
-                // Se guarda el texto del aviso para poder abrirlo desde la notificación
+            var notified = false
+            // Con la app en primer plano no se notifica: el usuario ya está viendo el aviso en pantalla
+            var suppressed = false
+            if (shouldSave) {
+                // Se guarda el texto del aviso para poder abrirlo desde la app o desde la notificación
                 snapshotName = SnapshotStore.saveText(applicationContext, section)
                 prefs.lastSnapshot = snapshotName
                 prefs.lastSnapshotUrl = PAGE_URL
-                notified = notifyUser(affected, snapshotName)
             }
-            // Si ya no hay coincidencia el hash se borra, así un aviso futuro idéntico volverá a notificar
-            prefs.lastAlertHash = if (met) alertHash else ""
+            if (shouldNotify) {
+                // Se consulta el primer plano justo ahora, porque la descarga pudo tardar
+                if (Foreground.isActive) {
+                    suppressed = true
+                } else {
+                    notified = notifyUser(affected)
+                }
+                prefs.lastNotifiedHash = alertHash
+            }
+            // Cuando no hay aviso se borran los hashes, así un aviso futuro idéntico volverá a guardarse y notificarse
+            prefs.lastAlertHash = if (hasAlert) alertHash else ""
+            if (!met) prefs.lastNotifiedHash = ""
 
             // Mensaje de estado que verá el usuario en la pantalla principal
             var status = when {
@@ -97,9 +114,9 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
                 !met -> "Revisión del $time: hay un aviso, pero no incluye los departamentos elegidos"
                 else -> "Revisión del $time: aviso para " + affected.joinToString(", ") { it.label }
             }
-            if (met && !shouldNotify) status += " (ya se notificó)"
+            if (hasAlert && !shouldSave) status += " (sin cambios)"
             if (snapshotName.isNotEmpty()) status += " - aviso guardado"
-            if (shouldNotify && !notified) {
+            if (shouldNotify && !suppressed && !notified) {
                 status += " - notificación bloqueada: permite las notificaciones de esta app en los ajustes de Android"
             }
             prefs.lastStatus = status
@@ -107,7 +124,7 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
         } catch (e: Exception) {
             // Error de red u otro problema: se registra en el estado y se decide si reintentar
             prefs.lastStatus = "Revisión del $time falló: ${e.message ?: e.javaClass.simpleName}"
-            if (manual) Result.failure() else Result.retry()
+            if (manual || refresh) Result.failure() else Result.retry()
         }
     }
 
@@ -135,7 +152,7 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
      * Muestra la notificación del aviso. Devuelve true si se mostró, o false si no hay permiso
      * para notificar (en Android 13 o superior el usuario debe conceder POST_NOTIFICATIONS).
      */
-    private fun notifyUser(affected: List<Department>, snapshotName: String): Boolean {
+    private fun notifyUser(affected: List<Department>): Boolean {
         val ctx = applicationContext
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS)
@@ -150,16 +167,14 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             ctx.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
 
-        // Al tocar la notificación se abre el texto guardado del aviso
-        val openSnapshot = Intent(ctx, SnapshotActivity::class.java).apply {
-            putExtra(SnapshotActivity.EXTRA_FILE, snapshotName)
-            putExtra(SnapshotActivity.EXTRA_URL, PAGE_URL)
+        // Al tocar la notificación se abre la pantalla principal, que muestra el último aviso guardado
+        val openApp = Intent(ctx, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
         val pendingIntent = PendingIntent.getActivity(
             ctx,
-            System.currentTimeMillis().toInt(), // código único para que cada notificación conserve su propio aviso
-            openSnapshot,
+            0,
+            openApp,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
@@ -171,7 +186,7 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             .setContentText("Departamentos: $names")
             .setStyle(
                 NotificationCompat.BigTextStyle()
-                    .bigText("El aviso incluye: $names. Toca para ver el texto guardado.")
+                    .bigText("El aviso incluye: $names. Toca para ver el aviso.")
             )
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
@@ -191,5 +206,8 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
 
         /** Clave del dato de entrada que indica que la revisión la pidió el usuario con "Revisar ahora". */
         const val KEY_MANUAL = "manual"
+
+        /** Clave del dato de entrada que indica que la revisión se lanzó al abrir la app. */
+        const val KEY_REFRESH = "refresh"
     }
 }

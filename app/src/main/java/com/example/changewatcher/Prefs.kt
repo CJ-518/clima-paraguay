@@ -43,7 +43,7 @@ data class WatchConfig(
 /**
  * Lectura y escritura de ajustes y estado usando SharedPreferences.
  * Además de la configuración, guarda datos de seguimiento: el último aviso
- * notificado, el estado de la última revisión y el último texto guardado.
+ * guardado, el último notificado, el estado de la última revisión y el último texto guardado.
  */
 class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("watcher", Context.MODE_PRIVATE)
@@ -68,13 +68,22 @@ class Prefs(context: Context) {
     }
 
     /**
-     * Huella (hash) del último aviso que coincidió con los departamentos elegidos.
-     * Permite notificar solo cuando el aviso es nuevo o cambió, y no en cada revisión.
-     * Queda vacía cuando no hay coincidencia, para que un aviso futuro vuelva a notificar.
+     * Huella (hash) del último aviso guardado, mencione o no los departamentos elegidos.
+     * Permite guardar solo cuando el aviso es nuevo o cambió, y no en cada revisión.
+     * Queda vacía cuando la página no tiene aviso, para que uno futuro vuelva a guardarse.
      */
     var lastAlertHash: String
         get() = sp.getString("lastAlertHash", "") ?: ""
         set(v) = sp.edit().putString("lastAlertHash", v).apply()
+
+    /**
+     * Huella (hash) del último aviso que coincidió con los departamentos elegidos y se notificó
+     * (o se mostró con la app abierta). Evita notificar dos veces el mismo aviso.
+     * Queda vacía cuando el aviso actual no coincide, para que uno futuro vuelva a notificar.
+     */
+    var lastNotifiedHash: String
+        get() = sp.getString("lastNotifiedHash", "") ?: ""
+        set(v) = sp.edit().putString("lastNotifiedHash", v).apply()
 
     /** Mensaje con el resultado de la última revisión; se muestra en la pantalla principal. */
     var lastStatus: String
