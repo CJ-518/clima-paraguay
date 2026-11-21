@@ -3,6 +3,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Permite programar alarmas a la hora exacta (en Android 12+ el usuario debe concederlo) -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Permite reprogramar las alarmas cuando el teléfono se reinicia -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="true"
@@ -23,6 +27,22 @@
         <activity
             android:name=".SnapshotActivity"
             android:exported="false" />
+
+        <!-- Recibe la alarma y lanza la revisión; solo la app puede enviarle la alarma -->
+        <receiver
+            android:name=".AlarmReceiver"
+            android:exported="false" />
+
+        <!-- Reprograma la alarma tras reiniciar, actualizar la app o cambiar el permiso de alarmas exactas -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 </manifest>

@@ -54,8 +54,9 @@ import java.util.concurrent.TimeUnit
  * Permite elegir los departamentos, el intervalo de revisión, activar o desactivar el monitoreo,
  * lanzar una revisión manual y abrir el último aviso guardado.
  *
- * Esta pantalla no descarga nada por sí misma: programa o lanza el trabajo de [CheckWorker]
- * a través de WorkManager y lee el resultado desde [Prefs].
+ * Esta pantalla no descarga nada por sí misma: programa las revisiones con [AlarmScheduler]
+ * (alarmas exactas) y WorkManager (respaldo), lanza revisiones manuales de [CheckWorker]
+ * y lee el resultado desde [Prefs].
  */
 
 /** Nombre único del trabajo periódico. Permite reemplazarlo o cancelarlo sin duplicarlo. */
@@ -135,14 +136,17 @@ fun WatcherScreen() {
     }
 
     /**
-     * Programa o cancela la revisión periódica según [cfg].
-     * Si está activado, crea un trabajo que se repite cada [WatchConfig.intervalMinutes] y solo corre con conexión
-     * a internet. La política UPDATE reemplaza el trabajo existente cuando cambia el intervalo.
-     * Si está desactivado, cancela el trabajo.
+     * Programa o cancela las revisiones según [cfg].
+     * Si está activado:
+     *  - programa la alarma exacta de [AlarmScheduler], que es la principal y la más puntual;
+     *  - mantiene además un trabajo periódico de WorkManager como respaldo (solo corre con conexión).
+     *    Si ambos coinciden no hay avisos repetidos, porque [CheckWorker] compara el hash del aviso.
+     * Si está desactivado, cancela la alarma y el trabajo periódico.
      */
     fun applySchedule(cfg: WatchConfig) {
         val wm = WorkManager.getInstance(ctx)
         if (cfg.enabled) {
+            AlarmScheduler.schedule(ctx, cfg.intervalMinutes)
             val request = PeriodicWorkRequestBuilder<CheckWorker>(cfg.intervalMinutes, TimeUnit.MINUTES)
                 .setConstraints(
                     Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
@@ -150,6 +154,7 @@ fun WatcherScreen() {
                 .build()
             wm.enqueueUniquePeriodicWork(WORK_NAME, ExistingPeriodicWorkPolicy.UPDATE, request)
         } else {
+            AlarmScheduler.cancel(ctx)
             wm.cancelUniqueWork(WORK_NAME)
         }
     }
@@ -229,6 +234,13 @@ fun WatcherScreen() {
                     // Al activar de nuevo, el aviso actual puede volver a notificarse
                     prefs.lastAlertHash = ""
                     applySchedule(cfg)
+                    // Android 12+: para alarmas exactas el usuario debe conceder el permiso en los ajustes.
+                    // Mientras tanto se usa una alarma normal, que se vuelve exacta sola al concederlo.
+                    if (wantOn && !AlarmScheduler.canScheduleExact(ctx)) {
+                        status =
+                            "Activa «Alarmas y recordatorios» para esta app y vuelve, para que las revisiones sean puntuales"
+                        AlarmScheduler.openExactAlarmSettings(ctx)
+                    }
                 },
             )
             Text("  Monitoreo ${if (enabled) "ACTIVADO" else "DESACTIVADO"}")
