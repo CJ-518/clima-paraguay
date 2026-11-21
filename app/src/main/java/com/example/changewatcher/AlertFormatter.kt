@@ -1,6 +1,5 @@
 package com.example.changewatcher
 
-import android.graphics.Color
 import android.graphics.Typeface
 import android.text.SpannableString
 import android.text.Spanned
@@ -60,31 +59,36 @@ private data class Line(
     val section: Section,
 )
 
-/** Colores del texto del aviso. */
-private val COLOR_TITLE = Color.parseColor("#0D47A1")      // azul oscuro: títulos y etiquetas
-private val COLOR_ALERT = Color.parseColor("#B71C1C")      // rojo oscuro: fenómeno esperado
-private val COLOR_SELECTED = Color.parseColor("#2E7D32")   // verde: departamentos elegidos por el usuario
+/**
+ * Colores del texto del aviso (valores ARGB). Se toman del tema del teléfono para que se lean bien
+ * tanto en modo claro como oscuro.
+ *
+ * @param title títulos y etiquetas.
+ * @param alert fenómeno esperado.
+ * @param selected departamentos elegidos por el usuario.
+ */
+data class AlertColors(val title: Int, val alert: Int, val selected: Int)
 
 object AlertFormatter {
 
     /**
      * Devuelve el aviso listo para mostrar: texto reorganizado, con negritas, tamaños y colores,
-     * y con la letra de los departamentos de [selected] en verde y negrita.
+     * y con la letra de los departamentos de [selected] en otro color y negrita.
      */
-    fun format(raw: String, selected: Set<String>): SpannableString {
+    fun format(raw: String, selected: Set<String>, colors: AlertColors): SpannableString {
         // 1) Reorganiza el texto con espacios entre secciones y apunta qué es cada línea
         val (text, lines) = layout(raw)
         val spannable = SpannableString(text)
 
         // 2) Negritas, tamaños y colores según el tipo de línea y su sección
-        styleLines(spannable, lines)
+        styleLines(spannable, lines, colors)
 
         // 3) Cambia el color de la letra de los departamentos elegidos donde aparezcan.
         //    Las posiciones se calculan sobre el texto ya reorganizado, por eso coinciden.
         //    Se aplica al final para que prevalezca sobre los colores de la sección.
         for (r in Departments.matchRanges(text, selected)) {
             spannable.setSpan(
-                ForegroundColorSpan(COLOR_SELECTED),
+                ForegroundColorSpan(colors.selected),
                 r.first,
                 r.last + 1, // el rango termina en r.last (inclusive); setSpan espera un final exclusivo
                 Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
@@ -155,12 +159,12 @@ object AlertFormatter {
 
     /**
      * Aplica negritas, tamaños y colores según el tipo de línea y su sección:
-     *  - Título: el más grande (1.5x), negrita, azul oscuro.
-     *  - Fenómeno esperado: etiqueta y contenido en negrita, 1.25x, rojo oscuro.
-     *  - Zona de cobertura y Departamentos afectados: etiqueta en negrita azul y contenido en 1.1x.
-     *  - Otras etiquetas (Fecha, Hora de emisión, ...): solo la etiqueta en negrita azul; el contenido queda normal.
+     *  - Título: el más grande (1.5x), negrita, color de título.
+     *  - Fenómeno esperado: etiqueta y contenido en negrita, 1.25x, color de alerta.
+     *  - Zona de cobertura y Departamentos afectados: etiqueta en negrita con color de título y contenido en 1.1x.
+     *  - Otras etiquetas (Fecha, Hora de emisión, ...): solo la etiqueta en negrita con color de título; el contenido queda normal.
      */
-    private fun styleLines(spannable: SpannableString, lines: List<Line>) {
+    private fun styleLines(spannable: SpannableString, lines: List<Line>, colors: AlertColors) {
 
         /** Aplica negrita, color y tamaño relativo entre [start] y [end]. Un tamaño de 1f o un color null no cambian nada. */
         fun style(start: Int, end: Int, size: Float, color: Int?, bold: Boolean) {
@@ -178,23 +182,23 @@ object AlertFormatter {
 
         for (l in lines) {
             when (l.kind) {
-                Kind.TITLE -> style(l.start, l.end, 1.5f, COLOR_TITLE, true)
+                Kind.TITLE -> style(l.start, l.end, 1.5f, colors.title, true)
 
                 Kind.LABEL -> {
                     val labelStop = l.start + l.labelEnd // fin de la etiqueta, incluidos los dos puntos
                     when (l.section) {
-                        Section.PHENOMENON -> style(l.start, l.end, 1.25f, COLOR_ALERT, true)
+                        Section.PHENOMENON -> style(l.start, l.end, 1.25f, colors.alert, true)
                         Section.KEY -> {
-                            style(l.start, labelStop, 1.1f, COLOR_TITLE, true)
+                            style(l.start, labelStop, 1.1f, colors.title, true)
                             style(labelStop, l.end, 1.1f, null, false)
                         }
 
-                        Section.NORMAL -> style(l.start, labelStop, 1f, COLOR_TITLE, true)
+                        Section.NORMAL -> style(l.start, labelStop, 1f, colors.title, true)
                     }
                 }
 
                 Kind.BODY -> when (l.section) {
-                    Section.PHENOMENON -> style(l.start, l.end, 1.25f, COLOR_ALERT, true)
+                    Section.PHENOMENON -> style(l.start, l.end, 1.25f, colors.alert, true)
                     Section.KEY -> style(l.start, l.end, 1.1f, null, false)
                     Section.NORMAL -> Unit // contenido normal: sin formato especial
                 }

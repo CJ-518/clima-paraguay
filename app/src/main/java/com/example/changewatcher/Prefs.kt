@@ -67,6 +67,23 @@ class Prefs(context: Context) {
             .apply()
     }
 
+    /** Lee los ajustes de apariencia; por defecto, colores del teléfono y modo del sistema. */
+    fun loadTheme() = ThemeSettings(
+        dynamic = sp.getBoolean("themeDynamic", true),
+        accent = sp.getString("themeAccent", ACCENTS[0].id) ?: ACCENTS[0].id,
+        mode = runCatching { ThemeMode.valueOf(sp.getString("themeMode", "SYSTEM") ?: "SYSTEM") }
+            .getOrDefault(ThemeMode.SYSTEM),
+    )
+
+    /** Guarda los ajustes de apariencia. */
+    fun saveTheme(t: ThemeSettings) {
+        sp.edit()
+            .putBoolean("themeDynamic", t.dynamic)
+            .putString("themeAccent", t.accent)
+            .putString("themeMode", t.mode.name)
+            .apply()
+    }
+
     /**
      * Huella (hash) del último aviso guardado, mencione o no los departamentos elegidos.
      * Permite guardar solo cuando el aviso es nuevo o cambió, y no en cada revisión.
