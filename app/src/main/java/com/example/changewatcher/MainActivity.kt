@@ -47,8 +47,21 @@ import androidx.work.workDataOf
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
+/*
+ * MainActivity.kt
+ *
+ * Pantalla principal de la app, construida con Jetpack Compose.
+ * Permite elegir los departamentos, el intervalo de revisión, activar o desactivar el monitoreo,
+ * lanzar una revisión manual y abrir el último aviso guardado.
+ *
+ * Esta pantalla no descarga nada por sí misma: programa o lanza el trabajo de [CheckWorker]
+ * a través de WorkManager y lee el resultado desde [Prefs].
+ */
+
+/** Nombre único del trabajo periódico. Permite reemplazarlo o cancelarlo sin duplicarlo. */
 private const val WORK_NAME = "url_watcher"
 
+/** Actividad de entrada (la que se abre desde el icono). Solo muestra [WatcherScreen]. */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,20 +73,28 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * Pantalla completa de configuración y control.
+ *
+ * Los valores editables (departamentos, intervalo, interruptor, estado) viven en variables de estado de Compose:
+ * cuando cambian, la pantalla se redibuja sola. Al abrirse, se inicializan con lo guardado en [Prefs].
+ */
 @Composable
 fun WatcherScreen() {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { Prefs(ctx) }
     val initial = remember { prefs.load() }
 
-    var selected by remember { mutableStateOf(initial.departments) }
-    var interval by remember { mutableStateOf(initial.intervalMinutes.toString()) }
-    var enabled by remember { mutableStateOf(initial.enabled) }
-    var status by remember { mutableStateOf(prefs.lastStatus) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var checkId by remember { mutableStateOf<UUID?>(null) }
+    // Estado de la pantalla
+    var selected by remember { mutableStateOf(initial.departments) }          // ids de departamentos marcados
+    var interval by remember { mutableStateOf(initial.intervalMinutes.toString()) } // texto del campo de minutos
+    var enabled by remember { mutableStateOf(initial.enabled) }               // interruptor de monitoreo
+    var status by remember { mutableStateOf(prefs.lastStatus) }               // mensaje inferior
+    var error by remember { mutableStateOf<String?>(null) }                   // error de validación visible
+    var checkId by remember { mutableStateOf<UUID?>(null) }                   // id de la revisión manual en curso
 
-    // Cuando termina una revisión manual, se muestra su resultado
+    // Cuando termina una revisión manual, se muestra su resultado.
+    // Se observa el estado del trabajo en WorkManager; al terminar, se lee el mensaje que dejó CheckWorker.
     LaunchedEffect(checkId) {
         val id = checkId ?: return@LaunchedEffect
         WorkManager.getInstance(ctx).getWorkInfoByIdFlow(id).collect { info ->
@@ -83,10 +104,12 @@ fun WatcherScreen() {
         }
     }
 
+    // Lanzador para pedir el permiso de notificaciones (Android 13 o superior)
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* nada que hacer; el worker revisa el permiso antes de notificar */ }
 
+    /** Pide el permiso de notificaciones solo si hace falta (Android 13+ y aún no concedido). */
     fun askNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
@@ -97,6 +120,7 @@ fun WatcherScreen() {
         }
     }
 
+    /** Arma la configuración a partir de lo que hay en pantalla. */
     fun currentConfig(isEnabled: Boolean) = WatchConfig(
         departments = selected,
         // El mínimo de WorkManager para tareas periódicas es 15 minutos
@@ -104,11 +128,18 @@ fun WatcherScreen() {
         enabled = isEnabled,
     )
 
+    /** Devuelve un mensaje de error si falta algo obligatorio, o null si todo está bien. */
     fun validate(): String? = when {
         selected.isEmpty() -> "Selecciona al menos un departamento"
         else -> null
     }
 
+    /**
+     * Programa o cancela la revisión periódica según [cfg].
+     * Si está activado, crea un trabajo que se repite cada [WatchConfig.intervalMinutes] y solo corre con conexión
+     * a internet. La política UPDATE reemplaza el trabajo existente cuando cambia el intervalo.
+     * Si está desactivado, cancela el trabajo.
+     */
     fun applySchedule(cfg: WatchConfig) {
         val wm = WorkManager.getInstance(ctx)
         if (cfg.enabled) {
@@ -130,6 +161,7 @@ fun WatcherScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // Encabezado y explicación
         Text("Clima Paraguay", style = MaterialTheme.typography.headlineMedium)
 
         Text(
@@ -139,6 +171,7 @@ fun WatcherScreen() {
 
         Text("Departamentos a vigilar:", style = MaterialTheme.typography.titleMedium)
 
+        // Atajos para marcar o desmarcar todos los departamentos
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = { selected = Departments.all.map { it.id }.toSet() }) {
                 Text("Marcar todos")
@@ -148,6 +181,7 @@ fun WatcherScreen() {
             }
         }
 
+        // Lista de departamentos con casilla; se puede tocar la fila entera o solo la casilla
         Column {
             Departments.all.forEach { d ->
                 val checked = d.id in selected
@@ -166,6 +200,7 @@ fun WatcherScreen() {
             }
         }
 
+        // Intervalo de revisión: solo acepta dígitos; el mínimo de 15 se aplica en currentConfig()
         OutlinedTextField(
             value = interval,
             onValueChange = { interval = it.filter(Char::isDigit) },
@@ -174,6 +209,7 @@ fun WatcherScreen() {
             modifier = Modifier.fillMaxWidth(),
         )
 
+        // Interruptor de monitoreo: al activarlo se valida, se pide el permiso, se guarda y se programa el trabajo
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(
                 checked = enabled,
@@ -198,9 +234,11 @@ fun WatcherScreen() {
             Text("  Monitoreo ${if (enabled) "ACTIVADO" else "DESACTIVADO"}")
         }
 
+        // Mensaje de error de validación, si lo hay
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Guardar: guarda los ajustes y, si el monitoreo está activo, reprograma el trabajo con el nuevo intervalo
             Button(onClick = {
                 val problem = validate()
                 if (problem != null) {
@@ -214,6 +252,7 @@ fun WatcherScreen() {
                 }
             }) { Text("Guardar") }
 
+            // Revisar ahora: lanza una única revisión inmediata, marcada como manual
             Button(onClick = {
                 val problem = validate()
                 if (problem != null) {
@@ -227,12 +266,14 @@ fun WatcherScreen() {
                         .setInputData(workDataOf(CheckWorker.KEY_MANUAL to true))
                         .build()
                     WorkManager.getInstance(ctx).enqueue(request)
+                    // Se recuerda el id para que LaunchedEffect muestre el resultado al terminar
                     checkId = request.id
                     status = "Revisando…"
                 }
             }) { Text("Revisar ahora") }
         }
 
+        // Abre SnapshotActivity con el último aviso guardado; si no hay ninguno, lo indica en el estado
         OutlinedButton(onClick = {
             val name = prefs.lastSnapshot
             if (name.isBlank()) {
@@ -246,10 +287,11 @@ fun WatcherScreen() {
             }
         }) { Text("Ver último aviso guardado") }
 
+        // Resultado de la última acción o revisión, y nota sobre la puntualidad de las revisiones
         Text(status, style = MaterialTheme.typography.bodyMedium)
         Text(
             "Nota: Android hace las revisiones periódicas aproximadamente en el intervalo indicado; " +
-                "la hora exacta depende de la batería y de la red.",
+                    "la hora exacta depende de la batería y de la red.",
             style = MaterialTheme.typography.bodySmall,
         )
     }
