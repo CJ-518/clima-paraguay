@@ -77,3 +77,7 @@ No subas al repositorio archivos `.jks`, `.keystore` ni `local.properties`. El `
 ## Aviso
 
 Esta app no es oficial ni está afiliada a la Dirección de Meteorología e Hidrología. Ante emergencias, consulta siempre los canales oficiales.
+
+## Licencia
+
+Distribuido bajo la licencia MIT. Consulta el archivo [LICENSE](LICENSE) para más detalles.
