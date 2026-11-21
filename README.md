@@ -6,18 +6,27 @@ Fuente de datos: <https://www.meteorologia.gov.py/avisos/>
 
 ## Funciones
 
-- Selección de uno o varios de los 18 departamentos (incluye Asunción como capital).
-- Revisión periódica en segundo plano (cada 15 minutos o más).
-- Notificación solo cuando el aviso es nuevo o cambió, para no repetir alertas.
-- Botón **Revisar ahora** para probar manualmente (notifica siempre que haya coincidencia).
-- Guarda el texto del aviso y permite verlo desde la notificación o con **Ver último aviso guardado**.
+- Pantalla principal con el último aviso guardado, con formato (título, fenómeno esperado destacado y departamentos elegidos resaltados con otro color de letra).
+- Al abrir la app se hace una actualización automática y siempre se muestra el último aviso guardado.
+- Se guardan todos los avisos nuevos que publica la página, mencionen o no tus departamentos.
+- Notificación solo cuando el aviso es nuevo o cambió y menciona alguno de los departamentos elegidos, para no repetir alertas.
+- Sin notificaciones mientras la app está abierta: el aviso ya se ve en pantalla.
+- Botones para **Actualizar**, **Copiar aviso** (al portapapeles) y **Abrir página** (en el navegador).
+- Pantalla de **Configuración** (icono de tuerca):
+  - Monitoreo activado o desactivado.
+  - Selección de uno o varios de los 18 departamentos (incluye Asunción como capital) en un menú desplegable.
+  - Intervalo de revisión de 15, 30, 45 o 60 minutos.
+  - Apariencia: colores dinámicos del teléfono (Android 12 o superior) o tema manual con cinco colores a elegir, y modo claro, oscuro o el del sistema.
+- Los cambios de configuración se guardan al instante.
 - Coincidencia por palabra completa, por lo que "Alto Paraguay" no se confunde con "Alto Paraná".
 
 ## Requisitos
 
 - Android 8.0 (API 26) o superior.
 - Permiso de notificaciones (Android 13+).
+- Permiso de alarmas y recordatorios (Android 12+), para que las revisiones sean puntuales.
 - Conexión a internet.
+- Colores dinámicos del teléfono: Android 12 o superior. En versiones anteriores se usa el tema manual.
 
 ## Instalación
 
@@ -28,10 +37,11 @@ Fuente de datos: <https://www.meteorologia.gov.py/avisos/>
 
 ## Uso
 
-1. Marca los departamentos que quieres vigilar.
-2. Indica cada cuántos minutos revisar (mínimo 15).
-3. Pulsa **Guardar** para activar el monitoreo.
-4. Opcional: pulsa **Revisar ahora** para comprobar que funciona.
+1. Toca el icono de tuerca para abrir la **Configuración**.
+2. Abre el menú **Departamentos** y marca los que quieres vigilar.
+3. Elige cada cuántos minutos revisar (15, 30, 45 o 60).
+4. Activa el **Monitoreo**.
+5. Vuelve a la pantalla principal. Opcional: pulsa **Actualizar** para comprobar que funciona.
 
 Android ejecuta las revisiones periódicas de forma aproximada. La hora exacta depende de la batería y de la red.
 
@@ -60,11 +70,16 @@ Para un APK de release firmado, usa en Android Studio *Build > Generate Signed A
 
 | Archivo | Función |
 | --- | --- |
-| `MainActivity.kt` | Pantalla principal y ajustes |
+| `MainActivity.kt` | Actividad de entrada y pantalla principal (último aviso y botones) |
+| `SettingsScreen.kt` | Pantalla de configuración y programación de las revisiones |
+| `AppTheme.kt` | Ajustes de apariencia y colores de la app |
+| `AlertFormatter.kt` | Formato del aviso guardado al mostrarlo |
 | `CheckWorker.kt` | Revisión en segundo plano y notificaciones |
+| `AlarmScheduler.kt` | Alarmas exactas para las revisiones periódicas |
+| `WatcherReceivers.kt` | Receptores de la alarma y del reinicio del teléfono |
+| `ClimaApp.kt` | Detecta si la app está en primer plano (para no notificar) |
 | `Departments.kt` | Lista de departamentos y coincidencia de nombres |
 | `SnapshotStore.kt` | Extracción y guardado del texto del aviso |
-| `SnapshotActivity.kt` | Pantalla para ver el aviso guardado |
 | `Prefs.kt` | Preferencias y configuración |
 
 ## Seguridad
