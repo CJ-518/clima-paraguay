@@ -39,9 +39,10 @@ Android ejecuta las revisiones periódicas de forma aproximada. La hora exacta d
 
 Requisitos: Android Studio reciente y JDK 17.
 
+1. Abre la carpeta del proyecto en Android Studio y espera a que termine la sincronización de Gradle.
+2. Compila el APK de depuración desde una terminal en la raíz del proyecto:
+
 ```powershell
-git clone https://github.com/TU_USUARIO/clima-paraguay.git
-cd clima-paraguay
 .\gradlew assembleDebug
 ```
 
@@ -53,11 +54,7 @@ Para un APK de release firmado, usa en Android Studio *Build > Generate Signed A
 
 1. Sube `versionCode` y `versionName` en `app/build.gradle.kts`.
 2. Compila y firma el APK.
-3. Publica el release:
-
-```powershell
-gh release create v1.1 ruta\al\app-release.apk --title "Clima Paraguay v1.1" --notes "Descripción de los cambios"
-```
+3. En la página del repositorio en GitHub, entra en **Releases > Draft a new release**, crea una etiqueta nueva, adjunta el APK y publica.
 
 ## Estructura
 
