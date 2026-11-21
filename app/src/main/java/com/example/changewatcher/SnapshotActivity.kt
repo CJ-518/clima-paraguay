@@ -30,8 +30,58 @@ import java.util.Locale
  * Estructura de la pantalla (de arriba a abajo):
  *  - encabezado con la fecha de guardado,
  *  - botón para abrir la página en vivo en el navegador,
- *  - cuerpo desplazable con el texto del aviso, con títulos con formato y departamentos resaltados.
+ *  - cuerpo desplazable con el texto del aviso, con espacios, negritas, tamaños y colores.
+ *
+ * El archivo guardado NO se modifica: es texto plano, una línea por bloque. El formato se aplica
+ * solo al mostrarlo, en dos pasos: [layout] reorganiza el texto con espacios entre secciones y
+ * [styleLines] aplica negritas, tamaños y colores.
  */
+
+/** Tipo de línea dentro del aviso. */
+private enum class Kind {
+    /** La primera línea: el título del aviso. */
+    TITLE,
+
+    /** Una línea con etiqueta corta antes de los dos puntos, por ejemplo "Fecha: ...". */
+    LABEL,
+
+    /** Cualquier otra línea; continúa la sección de la última etiqueta. */
+    BODY,
+}
+
+/** Sección del aviso, que decide el tamaño y el color de sus líneas. */
+private enum class Section {
+    /** Datos secundarios (fecha, hora de emisión, etc.): tamaño normal. */
+    NORMAL,
+
+    /** "Fenómeno esperado": es lo más importante, va grande, en negrita y en rojo. */
+    PHENOMENON,
+
+    /** "Zona de cobertura" y "Departamentos afectados": van un poco más grandes. */
+    KEY,
+}
+
+/**
+ * Una línea ya colocada en el texto que se muestra.
+ *
+ * @param start posición donde empieza la línea en el texto mostrado.
+ * @param end posición donde termina (exclusiva).
+ * @param kind tipo de línea.
+ * @param labelEnd cantidad de caracteres de la etiqueta contando los dos puntos (solo en LABEL; -1 en los demás).
+ * @param section sección a la que pertenece la línea.
+ */
+private data class Line(
+    val start: Int,
+    val end: Int,
+    val kind: Kind,
+    val labelEnd: Int,
+    val section: Section,
+)
+
+/** Colores del texto del aviso. */
+private val COLOR_TITLE = Color.parseColor("#0D47A1")   // azul oscuro: títulos y etiquetas
+private val COLOR_ALERT = Color.parseColor("#B71C1C")   // rojo oscuro: fenómeno esperado
+private val COLOR_HEADER = Color.parseColor("#546E7A")  // gris azulado: encabezado de la pantalla
 
 /**
  * Muestra el texto del último aviso guardado.
@@ -66,7 +116,8 @@ class SnapshotActivity : ComponentActivity() {
         // Encabezado: aquí se escribe la fecha de guardado o el mensaje de que no hay aviso
         val header = TextView(this).apply {
             setPadding(dp(16), dp(16), dp(16), dp(8))
-            textSize = 14f
+            textSize = 13f
+            setTextColor(COLOR_HEADER)
         }
         root.addView(header)
 
@@ -79,11 +130,12 @@ class SnapshotActivity : ComponentActivity() {
         }
         root.addView(openLive)
 
-        // Cuerpo con el texto del aviso (seleccionable) dentro de un ScrollView que ocupa el espacio restante
+        // Cuerpo con el texto del aviso (seleccionable) dentro de un ScrollView que ocupa el espacio restante.
+        // El interlineado ampliado (1.3) y el margen interior dan aire al texto.
         val body = TextView(this).apply {
-            setPadding(dp(16), dp(8), dp(16), dp(16))
-            textSize = 15f
-            setLineSpacing(0f, 1.15f)
+            setPadding(dp(20), dp(16), dp(20), dp(24))
+            textSize = 16f
+            setLineSpacing(0f, 1.3f)
             setTextIsSelectable(true)
         }
         val scroll = ScrollView(this).apply {
@@ -102,31 +154,44 @@ class SnapshotActivity : ComponentActivity() {
             val fmt = SimpleDateFormat("d MMM, HH:mm", Locale.forLanguageTag("es-PY"))
             val savedText = savedAt?.let { fmt.format(Date(it)) } ?: "fecha desconocida"
             header.text = "Guardado el $savedText" +
-                    if (replaced) "\nEl aviso de esta notificación fue reemplazado por uno más reciente." else ""
+                if (replaced) "\nEl aviso de esta notificación fue reemplazado por uno más reciente." else ""
             body.text = "Cargando…"
 
-            // Leer y convertir el texto puede tardar un momento, así que se hace fuera del hilo principal
+            // Leer y dar formato al texto puede tardar un momento, así que se hace fuera del hilo principal
             Thread {
-                val text = try {
-                    val raw = file.readText()
+                // Si la lectura falla, se muestra el error tal cual, sin darle formato de aviso
+                var failed = false
+                val raw = try {
+                    val content = file.readText()
                     // Lo guardado en versiones antiguas era HTML; lo nuevo ya es texto plano
-                    if (name.endsWith(".html")) SnapshotStore.htmlToText(raw) else raw
+                    if (name.endsWith(".html")) SnapshotStore.htmlToText(content) else content
                 } catch (e: Exception) {
+                    failed = true
                     "No se pudo leer el aviso guardado: ${e.message ?: e.javaClass.simpleName}"
                 }
 
-                // SpannableString permite aplicar formato (color, negrita, fondo) a partes del texto
+                // 1) Reorganiza el texto con espacios entre secciones y apunta qué es cada línea
+                val (text, lines) = if (failed) raw to emptyList() else layout(raw)
+
+                // SpannableString permite aplicar formato (color, negrita, tamaño, fondo) a partes del texto
                 val spannable = SpannableString(text)
 
-                // Resalta los títulos y las etiquetas del aviso
-                styleTitles(spannable, text)
+                // 2) Negritas, tamaños y colores según el tipo de línea y su sección
+                styleLines(spannable, lines)
 
-                // Resalta los departamentos elegidos donde aparezcan
+                // 3) Resalta los departamentos elegidos donde aparezcan: fondo amarillo y negrita.
+                //    Las posiciones se calculan sobre el texto ya reorganizado, por eso coinciden.
                 for (r in Departments.matchRanges(text, cfg.departments)) {
                     spannable.setSpan(
                         BackgroundColorSpan(Color.YELLOW),
                         r.first,
                         r.last + 1, // el rango termina en r.last (inclusive); setSpan espera un final exclusivo
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                    spannable.setSpan(
+                        StyleSpan(Typeface.BOLD),
+                        r.first,
+                        r.last + 1,
                         Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                     )
                 }
@@ -146,50 +211,102 @@ class SnapshotActivity : ComponentActivity() {
     }
 
     /**
-     * Da formato a los títulos del aviso, recorriendo el texto línea por línea:
-     * - la primera línea (el título principal) va grande, en negrita y en azul;
-     * - la línea "Fenómeno esperado: ..." va en negrita, un poco más grande y en azul;
-     * - las etiquetas como "Fecha:", "Hora de emisión:", "Zona de cobertura:" o "Departamentos afectados:"
-     *   van en negrita y azul (solo la etiqueta, hasta los dos puntos).
+     * Reorganiza el texto del aviso para que se lea con aire y devuelve el texto nuevo junto con
+     * la lista de líneas (posición, tipo y sección), que luego usa [styleLines].
+     *
+     * Reglas:
+     *  - la primera línea con contenido es el título;
+     *  - una línea con una etiqueta corta antes de los dos puntos (hasta 40 caracteres y 4 palabras,
+     *    por ejemplo "Fecha:" o "Hora de emisión:") es una etiqueta y abre una sección nueva;
+     *  - las demás líneas son contenido de la sección actual;
+     *  - se deja una línea en blanco después del título y antes de cada etiqueta, para separar las secciones.
      */
-    private fun styleTitles(spannable: SpannableString, text: String) {
-        val titleColor = Color.parseColor("#0D47A1")
+    private fun layout(raw: String): Pair<String, List<Line>> {
+        val out = StringBuilder()
+        val lines = mutableListOf<Line>()
+        var prev: Kind? = null
+        var section = Section.NORMAL
 
-        /** Aplica negrita y color azul entre [start] y [end]; [size] es el tamaño relativo (1f = sin cambio). */
-        fun style(start: Int, end: Int, size: Float) {
+        for (line in raw.split("\n")) {
+            if (line.isBlank()) continue
+
+            val colon = line.indexOf(':')
+            val isLabel = prev != null && colon in 1..40 &&
+                line.substring(0, colon).trim().split(" ").size <= 4
+            val kind = when {
+                prev == null -> Kind.TITLE
+                isLabel -> Kind.LABEL
+                else -> Kind.BODY
+            }
+
+            // Separador: línea en blanco tras el título y antes de cada etiqueta; salto simple en el resto
+            if (prev != null) {
+                out.append(if (prev == Kind.TITLE || kind == Kind.LABEL) "\n\n" else "\n")
+            }
+
+            // Cada etiqueta decide la sección que sigue (se compara sin acentos ni mayúsculas)
+            if (kind == Kind.LABEL) {
+                val label = SnapshotStore.fold(line.substring(0, colon))
+                section = when {
+                    label.startsWith("fenomeno esperado") -> Section.PHENOMENON
+                    label.contains("departamentos afectados") ||
+                        label.contains("zona de cobertura") -> Section.KEY
+                    else -> Section.NORMAL
+                }
+            }
+
+            val start = out.length
+            out.append(line)
+            lines.add(Line(start, out.length, kind, if (kind == Kind.LABEL) colon + 1 else -1, section))
+            prev = kind
+        }
+        return out.toString() to lines
+    }
+
+    /**
+     * Aplica negritas, tamaños y colores según el tipo de línea y su sección:
+     *  - Título: el más grande (1.5x), negrita, azul oscuro.
+     *  - Fenómeno esperado: etiqueta y contenido en negrita, 1.25x, rojo oscuro.
+     *  - Zona de cobertura y Departamentos afectados: etiqueta en negrita azul y contenido en 1.1x.
+     *  - Otras etiquetas (Fecha, Hora de emisión, ...): solo la etiqueta en negrita azul; el contenido queda normal.
+     */
+    private fun styleLines(spannable: SpannableString, lines: List<Line>) {
+
+        /** Aplica negrita, color y tamaño relativo entre [start] y [end]. Un tamaño de 1f o un color null no cambian nada. */
+        fun style(start: Int, end: Int, size: Float, color: Int?, bold: Boolean) {
             if (end <= start) return
-            spannable.setSpan(StyleSpan(Typeface.BOLD), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(ForegroundColorSpan(titleColor), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (bold) {
+                spannable.setSpan(StyleSpan(Typeface.BOLD), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            if (color != null) {
+                spannable.setSpan(ForegroundColorSpan(color), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
             if (size != 1f) {
                 spannable.setSpan(RelativeSizeSpan(size), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
         }
 
-        // offset lleva la posición donde empieza cada línea dentro del texto completo
-        var offset = 0
-        var isFirstLine = true
-        for (line in text.split("\n")) {
-            val start = offset
-            val end = start + line.length
-            offset = end + 1 // +1 por el salto de línea
-            if (line.isBlank()) continue
+        for (l in lines) {
+            when (l.kind) {
+                Kind.TITLE -> style(l.start, l.end, 1.5f, COLOR_TITLE, true)
 
-            if (isFirstLine) {
-                isFirstLine = false
-                style(start, end, 1.4f)
-                continue
-            }
+                Kind.LABEL -> {
+                    val labelStop = l.start + l.labelEnd // fin de la etiqueta, incluidos los dos puntos
+                    when (l.section) {
+                        Section.PHENOMENON -> style(l.start, l.end, 1.25f, COLOR_ALERT, true)
+                        Section.KEY -> {
+                            style(l.start, labelStop, 1.1f, COLOR_TITLE, true)
+                            style(labelStop, l.end, 1.1f, null, false)
+                        }
+                        Section.NORMAL -> style(l.start, labelStop, 1f, COLOR_TITLE, true)
+                    }
+                }
 
-            if (SnapshotStore.fold(line).startsWith("fenomeno esperado")) {
-                style(start, end, 1.15f)
-                continue
-            }
-
-            // Etiqueta corta antes de los dos puntos, por ejemplo "Fecha:" o "Hora de emisión:"
-            // (hasta 40 caracteres y 4 palabras, para no tomar frases largas por etiquetas)
-            val colon = line.indexOf(':')
-            if (colon in 1..40 && line.substring(0, colon).trim().split(" ").size <= 4) {
-                style(start, start + colon + 1, 1f)
+                Kind.BODY -> when (l.section) {
+                    Section.PHENOMENON -> style(l.start, l.end, 1.25f, COLOR_ALERT, true)
+                    Section.KEY -> style(l.start, l.end, 1.1f, null, false)
+                    Section.NORMAL -> Unit // contenido normal: sin formato especial
+                }
             }
         }
     }
