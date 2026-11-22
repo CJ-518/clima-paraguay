@@ -15,6 +15,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
@@ -34,7 +35,9 @@ import java.util.Locale
  *  4. Si hay un aviso nuevo (o la revisión es manual), guarda el texto, mencione o no los departamentos elegidos.
  *     Solo notifica si menciona alguno de los elegidos y la app NO está en primer plano
  *     (si está abierta, el usuario ya ve el aviso).
- *  5. Guarda un mensaje de estado que la pantalla principal muestra al usuario.
+ *  5. Busca la imagen que la página muestra con el aviso y la descarga (si es nueva) para verla en la app.
+ *     La imagen se borra cuando sale un aviso nuevo o cuando la página ya no tiene aviso.
+ *  6. Guarda un mensaje de estado que la pantalla principal muestra al usuario.
  */
 class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
 
@@ -94,6 +97,37 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
                 snapshotName = SnapshotStore.saveText(applicationContext, section)
                 prefs.lastSnapshot = snapshotName
                 prefs.lastSnapshotUrl = PAGE_URL
+                // Aviso nuevo: se borra ya la imagen del aviso anterior, antes de buscar la nueva
+                clearSavedImage(prefs)
+            }
+            // Imagen del aviso: se busca en el HTML y se descarga si el aviso es nuevo, si la imagen cambió
+            // o si todavía no está guardada. Si falla, no se pierde el aviso: solo se avisa en el estado.
+            // Cuando la página ya no tiene ningún aviso, se borra la imagen guardada.
+            var imageNote = ""
+            if (!hasAlert) {
+                if (prefs.lastImage.isNotEmpty() || prefs.lastImageUrl.isNotEmpty()) clearSavedImage(prefs)
+            } else {
+                val imageUrl = withContext(Dispatchers.Default) { SnapshotStore.findImageUrl(body, PAGE_URL) }
+                if (imageUrl == null) {
+                    // El aviso no trae imagen: se borra la de un aviso anterior para no mostrarla por error
+                    if (shouldSave || prefs.lastImageUrl.isNotEmpty()) clearSavedImage(prefs)
+                } else {
+                    val missing = SnapshotStore.imageFile(applicationContext, prefs.lastImage) == null
+                    if (shouldSave || imageUrl != prefs.lastImageUrl || missing) {
+                        val saved = runCatching {
+                            val bytes = withContext(Dispatchers.IO) { fetchBytes(imageUrl) }
+                            SnapshotStore.saveImage(applicationContext, bytes)
+                        }.getOrNull()
+                        if (saved != null) {
+                            prefs.lastImage = saved
+                            prefs.lastImageUrl = imageUrl
+                            imageNote = " - imagen guardada"
+                        } else {
+                            clearSavedImage(prefs)
+                            imageNote = " - no se pudo descargar la imagen del aviso"
+                        }
+                    }
+                }
             }
             if (shouldNotify) {
                 // Se consulta el primer plano justo ahora, porque la descarga pudo tardar
@@ -116,6 +150,7 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             }
             if (hasAlert && !shouldSave) status += " (sin cambios)"
             if (snapshotName.isNotEmpty()) status += " - aviso guardado"
+            status += imageNote
             if (shouldNotify && !suppressed && !notified) {
                 status += " - notificación bloqueada: permite las notificaciones de esta app en los ajustes de Android"
             }
@@ -146,6 +181,55 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
         } finally {
             conn.disconnect()
         }
+    }
+
+    /**
+     * Descarga un archivo (la imagen del aviso) y devuelve sus bytes.
+     * Sigue hasta 3 redirecciones (incluso de http a https, que HttpURLConnection no hace solo),
+     * usa 15 segundos de espera máxima y rechaza archivos de más de [MAX_IMAGE_BYTES].
+     */
+    private fun fetchBytes(urlStr: String): ByteArray {
+        var current = urlStr
+        repeat(4) {
+            val conn = URL(current).openConnection() as HttpURLConnection
+            conn.connectTimeout = 15_000
+            conn.readTimeout = 15_000
+            conn.instanceFollowRedirects = false
+            conn.setRequestProperty("User-Agent", "AvisosMeteorologicos/1.0")
+            conn.setRequestProperty("Accept", "image/*")
+            try {
+                val code = conn.responseCode
+                if (code in listOf(301, 302, 303, 307, 308)) {
+                    val location =
+                        conn.getHeaderField("Location") ?: throw IllegalStateException("HTTP $code sin destino")
+                    current = URL(URL(current), location).toString()
+                    return@repeat
+                }
+                if (code !in 200..299) throw IllegalStateException("HTTP $code")
+                if (conn.contentLengthLong > MAX_IMAGE_BYTES) throw IllegalStateException("imagen demasiado grande")
+                conn.inputStream.use { input ->
+                    val out = ByteArrayOutputStream()
+                    val buffer = ByteArray(16 * 1024)
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        out.write(buffer, 0, n)
+                        if (out.size() > MAX_IMAGE_BYTES) throw IllegalStateException("imagen demasiado grande")
+                    }
+                    return out.toByteArray()
+                }
+            } finally {
+                conn.disconnect()
+            }
+        }
+        throw IllegalStateException("demasiadas redirecciones")
+    }
+
+    /** Borra la imagen guardada y su dirección, para que la pantalla principal no muestre una imagen vieja. */
+    private fun clearSavedImage(prefs: Prefs) {
+        SnapshotStore.clearImages(applicationContext)
+        prefs.lastImage = ""
+        prefs.lastImageUrl = ""
     }
 
     /**
@@ -198,6 +282,9 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
     }
 
     companion object {
+        /** Tamaño máximo de la imagen del aviso que se descarga (12 MB). */
+        const val MAX_IMAGE_BYTES = 12_000_000
+
         /** Identificador del canal de notificaciones. */
         const val CHANNEL_ID = "avisos_meteorologicos"
 

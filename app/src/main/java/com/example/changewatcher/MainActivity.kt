@@ -9,19 +9,28 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -30,15 +39,29 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
@@ -56,8 +79,9 @@ import java.util.UUID
  * Actividad de entrada y pantalla principal, construidas con Jetpack Compose.
  *
  * La actividad elige los colores según los ajustes de apariencia y muestra una de dos pantallas:
- *  - [WatcherScreen]: el último aviso guardado (ya con formato), con botones para actualizar,
- *    copiar y abrir la página.
+ *  - [WatcherScreen]: el último aviso guardado (ya con formato) y su imagen (que se amplía al tocarla,
+ *    ver [ImageViewerDialog]), con un icono de actualizar arriba a la derecha y botones para copiar
+ *    y abrir la página.
  *  - [SettingsScreen]: monitoreo, departamentos, intervalo y apariencia (ver SettingsScreen.kt).
  *
  * Cada vez que la app pasa a primer plano se lanza una revisión (refresh) y, al terminar,
@@ -130,10 +154,13 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
     var checkId by remember { mutableStateOf<UUID?>(null) }                   // id de la revisión en curso
     var snapshotName by remember { mutableStateOf(prefs.lastSnapshot) }       // archivo del último aviso guardado
     var alertText by remember { mutableStateOf<String?>(null) }               // texto del último aviso (null = cargando)
+    var imageName by remember { mutableStateOf(prefs.lastImage) }             // archivo de la imagen del último aviso
+    var alertImage by remember { mutableStateOf<ImageBitmap?>(null) }         // imagen del aviso ya leída (null = sin imagen)
+    var showImage by rememberSaveable { mutableStateOf(false) }               // true = imagen ampliada a pantalla completa
 
     val askNotificationPermission = rememberNotificationPermissionAsker()
 
-    /** Lanza una revisión (al abrir la app o con el botón Actualizar). Reemplaza a la anterior si sigue en curso. */
+    /** Lanza una revisión (al abrir la app o con el icono Actualizar). Reemplaza a la anterior si sigue en curso. */
     fun startRefresh() {
         val request = OneTimeWorkRequestBuilder<CheckWorker>()
             .setInputData(workDataOf(CheckWorker.KEY_REFRESH to true))
@@ -162,6 +189,19 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
         }
     }
 
+    // Carga la imagen del aviso (reducida si es enorme). Se repite cada vez que cambia el archivo.
+    LaunchedEffect(imageName) {
+        alertImage = if (imageName.isBlank()) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                SnapshotStore.imageFile(ctx, imageName)?.let { f ->
+                    runCatching { SnapshotStore.decodeImage(f)?.asImageBitmap() }.getOrNull()
+                }
+            }
+        }
+    }
+
     // Cuando termina una revisión, se muestra su resultado y el aviso más reciente.
     // Se observa el estado del trabajo en WorkManager; al terminar, se lee lo que dejó CheckWorker.
     LaunchedEffect(checkId) {
@@ -170,6 +210,7 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
             if (info != null && info.state.isFinished) {
                 status = prefs.lastStatus
                 snapshotName = prefs.lastSnapshot
+                imageName = prefs.lastImage
             }
         }
     }
@@ -179,6 +220,17 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
         if (refreshTick == 0) return@LaunchedEffect
         if (prefs.load().departments.isEmpty()) return@LaunchedEffect
         startRefresh()
+    }
+
+    /** Acción del icono de actualizar: valida que haya departamentos, pide el permiso de notificaciones y revisa. */
+    fun onRefreshClick() {
+        if (prefs.load().departments.isEmpty()) {
+            error = "Selecciona al menos un departamento en Configuración"
+        } else {
+            error = null
+            askNotificationPermission()
+            startRefresh()
+        }
     }
 
     // Colores del aviso tomados del tema: título, fenómeno esperado y departamentos elegidos
@@ -195,6 +247,18 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // Barra superior: título y, en la esquina derecha, el icono para actualizar
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Avisos meteorológicos", style = MaterialTheme.typography.titleLarge)
+            IconButton(onClick = { onRefreshClick() }) {
+                Icon(Icons.Filled.Refresh, contentDescription = "Actualizar")
+            }
+        }
+
         // Último aviso guardado, con formato: siempre visible al entrar; se actualiza solo al terminar el refresh
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(
@@ -244,18 +308,23 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
                     }
                 }
 
-                // Botones: actualizar, copiar el aviso guardado y abrir la página en el navegador
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = {
-                        if (prefs.load().departments.isEmpty()) {
-                            error = "Selecciona al menos un departamento en Configuración"
-                        } else {
-                            error = null
-                            askNotificationPermission()
-                            startRefresh()
-                        }
-                    }) { Text("Actualizar") }
+                // Imagen del aviso (si la página la trae); al tocarla se abre ampliada y con zoom
+                val image = alertImage
+                if (snapshotName.isNotBlank() && image != null) {
+                    Image(
+                        bitmap = image,
+                        contentDescription = "Imagen del aviso. Toca para ampliar",
+                        contentScale = ContentScale.FillWidth,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { showImage = true },
+                    )
+                    Text("Toca la imagen para ampliarla", style = MaterialTheme.typography.bodySmall)
+                }
 
+                // Botones: copiar el aviso guardado y abrir la página en el navegador
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     // Copia el aviso tal como se ve (sin colores ni tamaños) al portapapeles
                     OutlinedButton(
                         enabled = !alertText.isNullOrBlank(),
@@ -285,5 +354,77 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
 
         // Mensaje de error, si lo hay
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    }
+
+    // Imagen ampliada a pantalla completa
+    val fullImage = alertImage
+    if (showImage && fullImage != null) {
+        ImageViewerDialog(fullImage, onDismiss = { showImage = false })
+    }
+}
+
+/**
+ * Muestra la imagen del aviso a pantalla completa sobre fondo negro.
+ * Se puede acercar con dos dedos, mover con un dedo cuando está ampliada, y volver al tamaño normal
+ * con doble toque. Se cierra con la X o con el botón Atrás del teléfono.
+ */
+@Composable
+fun ImageViewerDialog(image: ImageBitmap, onDismiss: () -> Unit) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        var scale by remember { mutableFloatStateOf(1f) }
+        var offset by remember { mutableStateOf(Offset.Zero) }
+        var size by remember { mutableStateOf(IntSize.Zero) }
+
+        /** Limita el desplazamiento para que la imagen ampliada no se salga de la pantalla. */
+        fun clamp(o: Offset, s: Float): Offset {
+            val maxX = size.width * (s - 1f) / 2f
+            val maxY = size.height * (s - 1f) / 2f
+            return Offset(o.x.coerceIn(-maxX, maxX), o.y.coerceIn(-maxY, maxY))
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .onSizeChanged { size = it },
+        ) {
+            Image(
+                bitmap = image,
+                contentDescription = "Imagen del aviso ampliada",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(onDoubleTap = {
+                            scale = 1f
+                            offset = Offset.Zero
+                        })
+                    }
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            val newScale = (scale * zoom).coerceIn(1f, 6f)
+                            scale = newScale
+                            offset = if (newScale == 1f) Offset.Zero else clamp(offset + pan, newScale)
+                        }
+                    }
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = offset.x,
+                        translationY = offset.y,
+                    ),
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp),
+            ) {
+                Icon(Icons.Filled.Close, contentDescription = "Cerrar", tint = Color.White)
+            }
+        }
     }
 }

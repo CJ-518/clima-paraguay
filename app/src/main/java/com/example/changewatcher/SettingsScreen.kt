@@ -2,7 +2,9 @@ package com.example.changewatcher
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -49,7 +52,8 @@ import kotlin.math.abs
 /*
  * SettingsScreen.kt
  *
- * Pantalla de configuración: monitoreo, departamentos a vigilar, intervalo de revisión y apariencia.
+ * Pantalla de configuración: monitoreo, departamentos a vigilar, intervalo de revisión, apariencia
+ * y un botón para abrir el repositorio del proyecto en GitHub.
  * Los cambios se guardan al instante (no hay botón Guardar).
  *
  * También contiene dos utilidades que usa esta pantalla y la principal:
@@ -341,5 +345,11 @@ fun SettingsScreen(theme: ThemeSettings, onThemeChange: (ThemeSettings) -> Unit,
                 }
             }
         }
+
+        // ---- Acerca de ----
+        Text("Acerca de", style = MaterialTheme.typography.titleMedium)
+        OutlinedButton(onClick = {
+            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL)))
+        }) { Text("Ver repositorio en GitHub") }
     }
 }

@@ -15,6 +15,9 @@ import android.content.Context
 /** Única página que la app revisa: la lista de avisos meteorológicos. */
 const val PAGE_URL = "https://www.meteorologia.gov.py/avisos/"
 
+/** Repositorio del proyecto en GitHub; se abre desde la pantalla de Configuración. */
+const val REPO_URL = "https://github.com/CJ-518/clima-paraguay"
+
 /**
  * Texto con el que empieza la parte del aviso que se guarda.
  * Si esta frase no aparece en la página, se considera que no hay ningún aviso activo.
@@ -116,4 +119,17 @@ class Prefs(context: Context) {
     var lastSnapshotUrl: String
         get() = sp.getString("lastSnapshotUrl", "") ?: ""
         set(v) = sp.edit().putString("lastSnapshotUrl", v).apply()
+
+    /** Nombre del archivo de la imagen del último aviso guardado (vacío si el aviso no tiene imagen). */
+    var lastImage: String
+        get() = sp.getString("lastImage", "") ?: ""
+        set(v) = sp.edit().putString("lastImage", v).apply()
+
+    /**
+     * Dirección de la que se descargó la imagen guardada. Sirve para saber si la imagen de la página
+     * cambió (aunque el texto del aviso sea el mismo) y para no descargarla de nuevo en cada revisión.
+     */
+    var lastImageUrl: String
+        get() = sp.getString("lastImageUrl", "") ?: ""
+        set(v) = sp.edit().putString("lastImageUrl", v).apply()
 }
