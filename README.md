@@ -17,7 +17,7 @@ Fuente de datos: <https://www.meteorologia.gov.py/avisos/>
   - Monitoreo activado o desactivado.
   - Selección de uno o varios de los 18 departamentos (incluye Asunción como capital) en un menú desplegable.
   - Intervalo de revisión de 15, 30, 45 o 60 minutos.
-  - Botón para abrir el repositorio del proyecto en GitHub.
+  - Sección **Acerca de**: muestra la versión instalada, permite **buscar actualizaciones** en los Releases de GitHub, descargar el APK nuevo con barra de progreso e instalarlo, y tiene un botón para abrir el repositorio del proyecto.
   - Apariencia: colores dinámicos del teléfono (Android 12 o superior) o tema manual con cinco colores a elegir, y modo claro, oscuro o el del sistema.
 - Los cambios de configuración se guardan al instante.
 - Coincidencia por palabra completa, por lo que "Alto Paraguay" no se confunde con "Alto Paraná".
@@ -28,6 +28,7 @@ Fuente de datos: <https://www.meteorologia.gov.py/avisos/>
 - Permiso de notificaciones (Android 13+).
 - Permiso de alarmas y recordatorios (Android 12+), para que las revisiones sean puntuales.
 - Conexión a internet.
+- Permiso para instalar aplicaciones desde la propia app (solo se pide la primera vez que se actualiza desde Configuración).
 - Colores dinámicos del teléfono: Android 12 o superior. En versiones anteriores se usa el tema manual.
 
 ## Instalación
@@ -47,6 +48,22 @@ Fuente de datos: <https://www.meteorologia.gov.py/avisos/>
 6. Si el aviso trae imagen, toca la imagen para verla ampliada.
 
 Android ejecuta las revisiones periódicas de forma aproximada. La hora exacta depende de la batería y de la red.
+
+## Actualizar la app
+
+En **Configuración > Acerca de** se ve la versión instalada y el botón **Buscar actualizaciones**:
+
+1. La app consulta el último release publicado en GitHub y lo compara con la versión instalada.
+2. Si hay una versión más nueva, muestra sus notas y el botón **Descargar e instalar**.
+3. Al terminar la descarga (con barra de progreso) se abre el instalador de Android, que pide la confirmación. La primera vez, Android pide además permitir a Clima Paraguay instalar aplicaciones.
+
+Para que funcione, cada release debe cumplir lo siguiente (`release.ps1` ya lo hace):
+
+- La etiqueta es `v` + `versionName` de `app/build.gradle.kts` (por ejemplo `v1.5` para la versión `1.5`).
+- Lleva adjunto un archivo `.apk`.
+- El APK nuevo está firmado con la misma clave que el instalado; si no, Android rechaza la actualización. Compilando siempre en la misma PC con `release.ps1` se usa la misma clave de depuración.
+
+Los borradores y pre-lanzamientos no se ofrecen como actualización.
 
 ## Compilar desde el código
 
@@ -97,7 +114,9 @@ Para publicar a mano: sube `versionCode` y `versionName`, compila, y en GitHub e
 | Archivo | Función |
 | --- | --- |
 | `MainActivity.kt` | Actividad de entrada y pantalla principal (último aviso, imagen ampliable e icono de actualizar) |
-| `SettingsScreen.kt` | Pantalla de configuración (incluye el botón al repositorio) y programación de las revisiones |
+| `SettingsScreen.kt` | Pantalla de configuración (incluye la versión, la búsqueda de actualizaciones y el botón al repositorio) y programación de las revisiones |
+| `UpdateChecker.kt` | Versión instalada, consulta del último release en GitHub, descarga del APK e inicio de la instalación |
+| `res/xml/file_paths.xml` | Carpeta que el FileProvider comparte con el instalador de Android (el APK descargado) |
 | `AppTheme.kt` | Ajustes de apariencia y colores de la app |
 | `AlertFormatter.kt` | Formato del aviso guardado al mostrarlo |
 | `CheckWorker.kt` | Revisión en segundo plano, descarga de la imagen y notificaciones |

@@ -23,7 +23,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
@@ -31,9 +33,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,6 +51,9 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
@@ -53,8 +61,10 @@ import kotlin.math.abs
  * SettingsScreen.kt
  *
  * Pantalla de configuración: monitoreo, departamentos a vigilar, intervalo de revisión, apariencia
- * y un botón para abrir el repositorio del proyecto en GitHub.
- * Los cambios se guardan al instante (no hay botón Guardar).
+ * y la sección «Acerca de», que muestra la versión instalada, busca versiones nuevas en los Releases
+ * de GitHub (ver UpdateChecker.kt), las descarga e inicia su instalación, y tiene un botón para abrir
+ * el repositorio del proyecto.
+ * Los cambios de ajustes se guardan al instante (no hay botón Guardar).
  *
  * También contiene dos utilidades que usa esta pantalla y la principal:
  * [applySchedule] (programa o cancela las revisiones) y [rememberNotificationPermissionAsker].
@@ -111,6 +121,11 @@ fun rememberNotificationPermissionAsker(): () -> Unit {
     }
 }
 
+/** Abre una dirección web en el navegador; si el teléfono no tiene ninguno, no hace nada. */
+private fun openUrl(ctx: Context, url: String) {
+    runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+}
+
 /** Fila con un botón de opción y su texto; se puede tocar toda la fila. */
 @Composable
 private fun OptionRow(selected: Boolean, label: String, enabled: Boolean = true, onClick: () -> Unit) {
@@ -150,6 +165,80 @@ fun SettingsScreen(theme: ThemeSettings, onThemeChange: (ThemeSettings) -> Unit,
     var error by remember { mutableStateOf<String?>(null) }                   // error de validación
 
     val askNotificationPermission = rememberNotificationPermissionAsker()
+
+    // ---- Actualizaciones (ver UpdateChecker.kt) ----
+    val scope = rememberCoroutineScope()
+    val currentVersion = remember { Updater.currentVersionName(ctx) }         // versión instalada
+    var checking by remember { mutableStateOf(false) }                        // true = consultando GitHub
+    var update by remember { mutableStateOf<ReleaseInfo?>(null) }             // versión nueva encontrada
+    var updateMessage by remember { mutableStateOf<String?>(null) }           // resultado o error de la actualización
+    var downloading by remember { mutableStateOf(false) }                     // true = descargando el APK
+    var progress by remember { mutableFloatStateOf(-1f) }                     // avance 0..1 (-1 = no se conoce)
+    var downloadedFile by remember { mutableStateOf<File?>(null) }            // APK ya descargado, listo para instalar
+
+    // Al abrir la pantalla se borran los APK de descargas anteriores que ya no sirven
+    LaunchedEffect(Unit) { Updater.cleanObsolete(ctx) }
+
+    /** Abre el instalador de Android; si falta el permiso de instalar apps, lleva a concederlo. */
+    fun startInstall(file: File) {
+        if (!Updater.canInstall(ctx)) {
+            updateMessage = "Permite a Clima Paraguay instalar aplicaciones, vuelve aquí y toca «Instalar»."
+            runCatching { Updater.openInstallPermissionSettings(ctx) }
+            return
+        }
+        runCatching { Updater.installApk(ctx, file) }.onFailure {
+            updateMessage = "No se pudo abrir el instalador: ${it.message ?: it.javaClass.simpleName}"
+        }
+    }
+
+    /** Consulta en GitHub si hay una versión más nueva que la instalada. */
+    fun checkUpdates() {
+        if (checking || downloading) return
+        checking = true
+        update = null
+        downloadedFile = null
+        updateMessage = null
+        scope.launch {
+            when (val result = Updater.checkForUpdate(ctx)) {
+                is UpdateResult.Available -> update = result.release
+                is UpdateResult.UpToDate ->
+                    updateMessage = "Ya tienes la última versión (${result.release.versionName})."
+
+                UpdateResult.NoReleases ->
+                    updateMessage = "Todavía no hay versiones publicadas en GitHub."
+
+                is UpdateResult.Failed ->
+                    updateMessage = "No se pudo buscar actualizaciones: ${result.reason}."
+            }
+            checking = false
+        }
+    }
+
+    /** Descarga el APK del release y, al terminar, abre el instalador (si la app sigue a la vista). */
+    fun startDownload(release: ReleaseInfo) {
+        if (checking || downloading) return
+        downloading = true
+        progress = -1f
+        updateMessage = null
+        scope.launch {
+            try {
+                val file = Updater.downloadApk(ctx, release) { progress = it }
+                downloading = false
+                downloadedFile = file
+                if (Foreground.isActive) {
+                    startInstall(file)
+                } else {
+                    updateMessage = "Descarga lista. Toca «Instalar» para continuar."
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                updateMessage = "La descarga falló: ${Updater.friendlyError(e)}."
+            } finally {
+                downloading = false
+            }
+        }
+    }
 
     /** Cambia los departamentos y guarda al instante. */
     fun setSelected(new: Set<String>) {
@@ -348,8 +437,76 @@ fun SettingsScreen(theme: ThemeSettings, onThemeChange: (ThemeSettings) -> Unit,
 
         // ---- Acerca de ----
         Text("Acerca de", style = MaterialTheme.typography.titleMedium)
-        OutlinedButton(onClick = {
-            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL)))
-        }) { Text("Ver repositorio en GitHub") }
+        Text("Clima Paraguay", style = MaterialTheme.typography.bodyLarge)
+        Text("Versión actual: $currentVersion", style = MaterialTheme.typography.bodyMedium)
+
+        // Búsqueda de actualizaciones en los Releases de GitHub
+        OutlinedButton(
+            enabled = !checking && !downloading,
+            onClick = { checkUpdates() },
+        ) { Text(if (checking) "Buscando…" else "Buscar actualizaciones") }
+        if (checking) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        updateMessage?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+
+        // Versión nueva encontrada: notas, descarga con progreso e instalación
+        update?.let { release ->
+            val shape = RoundedCornerShape(12.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(shape)
+                    .border(1.dp, MaterialTheme.colorScheme.primary, shape)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Nueva versión disponible: ${release.versionName}", style = MaterialTheme.typography.titleSmall)
+                Text("Tienes la versión $currentVersion.", style = MaterialTheme.typography.bodySmall)
+                if (release.notes.isNotBlank()) {
+                    Text(
+                        release.notes.trim(),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 8,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                val ready = downloadedFile
+                when {
+                    downloading -> {
+                        Text(
+                            if (progress >= 0f) "Descargando… ${(progress * 100).toInt()} %" else "Descargando…",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        if (progress >= 0f) {
+                            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                        Text(
+                            "Mantén esta pantalla abierta hasta que termine.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+
+                    ready != null -> Button(onClick = { startInstall(ready) }) {
+                        Text("Instalar versión ${release.versionName}")
+                    }
+
+                    release.apkUrl != null -> Button(onClick = { startDownload(release) }) {
+                        val size = if (release.apkSize > 0) " (${Updater.formatSize(release.apkSize)})" else ""
+                        Text("Descargar e instalar$size")
+                    }
+
+                    else -> Text(
+                        "Este release no incluye un archivo APK; puedes verlo en GitHub.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+
+                TextButton(onClick = { openUrl(ctx, release.pageUrl) }) { Text("Ver release en GitHub") }
+            }
+        }
+
+        OutlinedButton(onClick = { openUrl(ctx, REPO_URL) }) { Text("Ver repositorio en GitHub") }
     }
 }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Carpetas que el FileProvider puede compartir. Solo la caché "updates", donde se guarda el APK descargado. -->
+<paths>
+    <cache-path
+        name="updates"
+        path="updates/" />
+</paths>
