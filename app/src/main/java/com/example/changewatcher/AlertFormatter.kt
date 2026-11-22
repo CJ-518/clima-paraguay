@@ -20,9 +20,6 @@ import android.text.style.StyleSpan
 
 /** Tipo de línea dentro del aviso. */
 private enum class Kind {
-    /** La primera línea: el título del aviso. */
-    TITLE,
-
     /** Una línea con etiqueta corta antes de los dos puntos, por ejemplo "Fecha: ...". */
     LABEL,
 
@@ -32,8 +29,11 @@ private enum class Kind {
 
 /** Sección del aviso, que decide el tamaño y el color de sus líneas. */
 private enum class Section {
-    /** Datos secundarios (fecha, hora de emisión, etc.): tamaño normal. */
+    /** Datos secundarios: tamaño normal. */
     NORMAL,
+
+    /** Fecha y hora de emisión: solo los números de la línea de la etiqueta van en otro color. */
+    EMISSION,
 
     /** "Fenómeno esperado": es lo más importante, va grande, en negrita y en rojo. */
     PHENOMENON,
@@ -66,8 +66,14 @@ private data class Line(
  * @param title títulos y etiquetas.
  * @param alert fenómeno esperado.
  * @param selected departamentos elegidos por el usuario.
+ * @param emission números de la fecha y la hora de emisión.
  */
-data class AlertColors(val title: Int, val alert: Int, val selected: Int)
+data class AlertColors(
+    val title: Int,
+    val alert: Int,
+    val selected: Int,
+    val emission: Int,
+)
 
 object AlertFormatter {
 
@@ -108,11 +114,11 @@ object AlertFormatter {
      * la lista de líneas (posición, tipo y sección), que luego usa [styleLines].
      *
      * Reglas:
-     *  - la primera línea con contenido es el título;
+     *  - el título del aviso ("Detalle de Aviso Meteorologico", la primera línea) no se muestra: ocupa mucho espacio;
      *  - una línea con una etiqueta corta antes de los dos puntos (hasta 40 caracteres y 4 palabras,
      *    por ejemplo "Fecha:" o "Hora de emisión:") es una etiqueta y abre una sección nueva;
      *  - las demás líneas son contenido de la sección actual;
-     *  - se deja una línea en blanco después del título y antes de cada etiqueta, para separar las secciones.
+     *  - se deja una línea en blanco antes de cada etiqueta (menos la primera), para separar las secciones.
      */
     private fun layout(raw: String): Pair<String, List<Line>> {
         val out = StringBuilder()
@@ -123,18 +129,17 @@ object AlertFormatter {
         for (line in raw.split("\n")) {
             if (line.isBlank()) continue
 
-            val colon = line.indexOf(':')
-            val isLabel = prev != null && colon in 1..40 &&
-                    line.substring(0, colon).trim().split(" ").size <= 4
-            val kind = when {
-                prev == null -> Kind.TITLE
-                isLabel -> Kind.LABEL
-                else -> Kind.BODY
-            }
+            // Se omite el título del aviso: es la primera línea y solo repite el nombre de la página
+            if (prev == null && SnapshotStore.hasMarker(line, SAVE_FROM)) continue
 
-            // Separador: línea en blanco tras el título y antes de cada etiqueta; salto simple en el resto
+            val colon = line.indexOf(':')
+            val isLabel = colon in 1..40 &&
+                    line.substring(0, colon).trim().split(" ").size <= 4
+            val kind = if (isLabel) Kind.LABEL else Kind.BODY
+
+            // Separador: línea en blanco antes de cada etiqueta (salvo la primera línea); salto simple en el resto
             if (prev != null) {
-                out.append(if (prev == Kind.TITLE || kind == Kind.LABEL) "\n\n" else "\n")
+                out.append(if (kind == Kind.LABEL) "\n\n" else "\n")
             }
 
             // Cada etiqueta decide la sección que sigue (se compara sin acentos ni mayúsculas)
@@ -144,6 +149,10 @@ object AlertFormatter {
                     label.startsWith("fenomeno esperado") -> Section.PHENOMENON
                     label.contains("departamentos afectados") ||
                             label.contains("zona de cobertura") -> Section.KEY
+
+                    label.startsWith("fecha") ||
+                            label.startsWith("hora") ||
+                            label.contains("emision") -> Section.EMISSION
 
                     else -> Section.NORMAL
                 }
@@ -159,10 +168,11 @@ object AlertFormatter {
 
     /**
      * Aplica negritas, tamaños y colores según el tipo de línea y su sección:
-     *  - Título: el más grande (1.5x), negrita, color de título.
      *  - Fenómeno esperado: etiqueta y contenido en negrita, 1.25x, color de alerta.
      *  - Zona de cobertura y Departamentos afectados: etiqueta en negrita con color de título y contenido en 1.1x.
-     *  - Otras etiquetas (Fecha, Hora de emisión, ...): solo la etiqueta en negrita con color de título; el contenido queda normal.
+     *  - Fecha y hora de emisión: la etiqueta como las demás (negrita, color de título) y, en esa misma línea,
+     *    solo los números (22/11/2026, 14:30, ...) con un color distinto, sin cambiar el tamaño.
+     *  - Otras etiquetas: solo la etiqueta en negrita con color de título; el contenido queda normal.
      */
     private fun styleLines(spannable: SpannableString, lines: List<Line>, colors: AlertColors) {
 
@@ -180,14 +190,29 @@ object AlertFormatter {
             }
         }
 
+        // Números de una fecha u hora: "22", "2026", "22/11/2026", "14:30", "14:30:05"...
+        val numberRegex = Regex("\\d+(?:[:/.\\-]\\d+)*")
+        val fullText = spannable.toString()
+
+        /** Pinta solo los números que haya entre [start] y [end]; el resto del texto no cambia. */
+        fun colorNumbers(start: Int, end: Int) {
+            if (end <= start) return
+            for (m in numberRegex.findAll(fullText.substring(start, end))) {
+                style(start + m.range.first, start + m.range.last + 1, 1f, colors.emission, false)
+            }
+        }
+
         for (l in lines) {
             when (l.kind) {
-                Kind.TITLE -> style(l.start, l.end, 1.5f, colors.title, true)
-
                 Kind.LABEL -> {
                     val labelStop = l.start + l.labelEnd // fin de la etiqueta, incluidos los dos puntos
                     when (l.section) {
                         Section.PHENOMENON -> style(l.start, l.end, 1.25f, colors.alert, true)
+                        Section.EMISSION -> {
+                            style(l.start, labelStop, 1f, colors.title, true)
+                            colorNumbers(labelStop, l.end)
+                        }
+
                         Section.KEY -> {
                             style(l.start, labelStop, 1.1f, colors.title, true)
                             style(labelStop, l.end, 1.1f, null, false)
@@ -200,7 +225,7 @@ object AlertFormatter {
                 Kind.BODY -> when (l.section) {
                     Section.PHENOMENON -> style(l.start, l.end, 1.25f, colors.alert, true)
                     Section.KEY -> style(l.start, l.end, 1.1f, null, false)
-                    Section.NORMAL -> Unit // contenido normal: sin formato especial
+                    Section.NORMAL, Section.EMISSION -> Unit // el texto que siga a la fecha y hora queda normal // contenido normal: sin formato especial
                 }
             }
         }

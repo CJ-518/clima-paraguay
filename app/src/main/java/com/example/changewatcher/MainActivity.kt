@@ -9,6 +9,11 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -21,6 +26,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -29,11 +35,11 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,12 +54,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -68,9 +79,6 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.UUID
 
 /*
@@ -80,8 +88,9 @@ import java.util.UUID
  *
  * La actividad elige los colores según los ajustes de apariencia y muestra una de dos pantallas:
  *  - [WatcherScreen]: el último aviso guardado (ya con formato) y su imagen (que se amplía al tocarla,
- *    ver [ImageViewerDialog]), con un icono de actualizar arriba a la derecha y botones para copiar
- *    y abrir la página.
+ *    ver [ImageViewerDialog]), con un icono de actualizar arriba a la derecha (que muestra una animación
+ *    mientras se revisa, ver [RefreshButton]) y, a su derecha, el icono de configuración; en la esquina
+ *    superior derecha de la tarjeta del aviso van los iconos de abrir la página y copiar el aviso.
  *  - [SettingsScreen]: monitoreo, departamentos, intervalo y apariencia (ver SettingsScreen.kt).
  *
  * Cada vez que la app pasa a primer plano se lanza una revisión (refresh) y, al terminar,
@@ -152,6 +161,7 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
     var status by remember { mutableStateOf(prefs.lastStatus) }               // mensaje de estado
     var error by remember { mutableStateOf<String?>(null) }                   // error visible
     var checkId by remember { mutableStateOf<UUID?>(null) }                   // id de la revisión en curso
+    var refreshing by remember { mutableStateOf(false) }                      // true = hay una revisión en curso (se muestra la animación)
     var snapshotName by remember { mutableStateOf(prefs.lastSnapshot) }       // archivo del último aviso guardado
     var alertText by remember { mutableStateOf<String?>(null) }               // texto del último aviso (null = cargando)
     var imageName by remember { mutableStateOf(prefs.lastImage) }             // archivo de la imagen del último aviso
@@ -169,7 +179,7 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
             .enqueueUniqueWork(REFRESH_WORK_NAME, ExistingWorkPolicy.REPLACE, request)
         // Se recuerda el id para que LaunchedEffect muestre el resultado al terminar
         checkId = request.id
-        status = "Actualizando…"
+        refreshing = true
     }
 
     // Carga el texto del último aviso guardado. Se repite cada vez que cambia el archivo.
@@ -208,6 +218,7 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
         val id = checkId ?: return@LaunchedEffect
         WorkManager.getInstance(ctx).getWorkInfoByIdFlow(id).collect { info ->
             if (info != null && info.state.isFinished) {
+                refreshing = false
                 status = prefs.lastStatus
                 snapshotName = prefs.lastSnapshot
                 imageName = prefs.lastImage
@@ -238,6 +249,13 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
         title = MaterialTheme.colorScheme.primary.toArgb(),
         alert = MaterialTheme.colorScheme.error.toArgb(),
         selected = MaterialTheme.colorScheme.tertiary.toArgb(),
+        // Números de la fecha y hora de emisión: un violeta fijo, distinto del azul, el rojo y el verde del resto
+        // del aviso, en versión clara u oscura según el fondo para que se lea bien en ambos modos
+        emission = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) {
+            Color(0xFFCE93D8)
+        } else {
+            Color(0xFF6A1B9A)
+        }.toArgb(),
     )
 
     Column(
@@ -247,20 +265,26 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Barra superior: título y, en la esquina derecha, el icono para actualizar
+        // Barra superior: título y, en la esquina derecha, los iconos de actualizar y de configuración
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("Avisos", style = MaterialTheme.typography.titleLarge)
-            IconButton(onClick = { onRefreshClick() }) {
-                Icon(Icons.Filled.Refresh, contentDescription = "Actualizar")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RefreshButton(refreshing = refreshing, onClick = { onRefreshClick() })
+                IconButton(onClick = onOpenSettings) {
+                    Icon(Icons.Filled.Settings, contentDescription = "Configuración")
+                }
             }
         }
 
-        // Resultado de la última acción o revisión, justo debajo del icono de actualizar
-        Text(status, style = MaterialTheme.typography.bodyMedium)
+        // Resultado de la última acción o revisión, justo debajo del icono de actualizar.
+        // Mientras se revisa no se muestra: el progreso se ve en la animación del botón.
+        if (!refreshing) {
+            Text(status, style = MaterialTheme.typography.bodyMedium)
+        }
 
         // Mensaje de error, si lo hay
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -285,12 +309,6 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
                     )
 
                     else -> {
-                        val savedAt = SnapshotStore.savedAt(snapshotName)
-                        val fmt = SimpleDateFormat("d MMM, HH:mm", Locale.forLanguageTag("es-PY"))
-                        Text(
-                            "Guardado el " + (savedAt?.let { fmt.format(Date(it)) } ?: "fecha desconocida"),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
                         // El aviso con formato; los departamentos elegidos se resaltan con otro color de letra
                         val raw = alertText ?: ""
                         val formatted = remember(raw, selected, alertColors) {
@@ -329,10 +347,20 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
                     Text("Toca la imagen para ampliarla", style = MaterialTheme.typography.bodySmall)
                 }
 
-                // Botones: copiar el aviso guardado y abrir la página en el navegador
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Iconos al final de la tarjeta, en la esquina inferior derecha: abrir la página y, en la esquina, copiar el aviso
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // Abre la página de avisos en el navegador
+                    IconButton(onClick = {
+                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PAGE_URL)))
+                    }) {
+                        Icon(OpenInNewIcon, contentDescription = "Abrir página")
+                    }
                     // Copia el aviso tal como se ve (sin colores ni tamaños) al portapapeles
-                    OutlinedButton(
+                    IconButton(
                         enabled = !alertText.isNullOrBlank(),
                         onClick = {
                             val text = AlertFormatter.format(alertText ?: "", selected, alertColors).toString()
@@ -340,16 +368,8 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
                                 .setPrimaryClip(ClipData.newPlainText("Aviso meteorológico", text))
                             status = "Aviso copiado al portapapeles"
                         },
-                    ) { Text("Copiar aviso") }
-                }
-                // Abrir la página y, al lado, el acceso a la configuración (icono de tuerca)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = {
-                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PAGE_URL)))
-                    }) { Text("Abrir página") }
-
-                    OutlinedButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Configuración")
+                    ) {
+                        Icon(CopyIcon, contentDescription = "Copiar aviso")
                     }
                 }
             }
@@ -361,6 +381,87 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
     if (showImage && fullImage != null) {
         ImageViewerDialog(fullImage, onDismiss = { showImage = false })
     }
+}
+
+/**
+ * Icono de copiar (dos hojas). La librería de iconos que usa el proyecto no lo trae, así que se dibuja aquí
+ * con el mismo trazo de los iconos Material.
+ */
+private val CopyIcon: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "ContentCopy",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).addPath(
+        pathData = addPathNodes(
+            "M16,1L4,1C2.9,1 2,1.9 2,3v14h2L4,3h12L16,1zM19,5L8,5C6.9,5 6,5.9 6,7v14c0,1.1 0.9,2 2,2h11" +
+                    "c1.1,0 2,-0.9 2,-2L21,7C21,5.9 20.1,5 19,5zM19,21L8,21L8,7h11L19,21z"
+        ),
+        fill = SolidColor(Color.Black),
+    ).build()
+}
+
+/** Icono de abrir en el navegador (cuadro con flecha saliendo), dibujado igual que [CopyIcon]. */
+private val OpenInNewIcon: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "OpenInNew",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).addPath(
+        pathData = addPathNodes(
+            "M19,19H5V5h7V3H5C3.89,3 3,3.9 3,5v14c0,1.1 0.89,2 2,2h14c1.1,0 2,-0.9 2,-2v-7h-2V19z" +
+                    "M14,3v2h3.59l-9.83,9.83 1.41,1.41L19,6.41V10h2V3H14z"
+        ),
+        fill = SolidColor(Color.Black),
+    ).build()
+}
+
+/**
+ * Botón de actualizar de la barra superior.
+ *
+ * En reposo es solo el icono. Mientras [refreshing] es true, un anillo de progreso gira alrededor del botón
+ * y el icono rota sobre sí mismo, para que se vea que la revisión está en proceso. Durante ese tiempo
+ * los toques se ignoran (el botón conserva su color normal).
+ *
+ * @param refreshing true mientras hay una revisión en curso.
+ * @param onClick acción al tocar el botón cuando no hay una revisión en curso.
+ */
+@Composable
+fun RefreshButton(refreshing: Boolean, onClick: () -> Unit) {
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(48.dp)) {
+        // Anillo de progreso alrededor del icono
+        if (refreshing) {
+            CircularProgressIndicator(modifier = Modifier.size(40.dp), strokeWidth = 3.dp)
+        }
+        IconButton(onClick = { if (!refreshing) onClick() }) {
+            if (refreshing) {
+                SpinningRefreshIcon()
+            } else {
+                Icon(Icons.Filled.Refresh, contentDescription = "Actualizar")
+            }
+        }
+    }
+}
+
+/** Icono de actualizar que da una vuelta completa por segundo, sin parar. Solo existe mientras se actualiza. */
+@Composable
+private fun SpinningRefreshIcon() {
+    val transition = rememberInfiniteTransition(label = "refresh")
+    val angle by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(durationMillis = 1000, easing = LinearEasing)),
+        label = "refreshAngle",
+    )
+    Icon(
+        Icons.Filled.Refresh,
+        contentDescription = "Actualizando",
+        modifier = Modifier.rotate(angle),
+    )
 }
 
 /**

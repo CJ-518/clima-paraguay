@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.changewatcher"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.7"
+        versionCode = 13
+        versionName = "2.2"
     }
 
     buildTypes {
