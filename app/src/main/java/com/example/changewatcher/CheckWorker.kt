@@ -31,7 +31,8 @@ import java.util.Locale
  * Flujo de cada revisión:
  *  1. Lee los ajustes y decide si debe correr.
  *  2. Descarga la página de avisos y la convierte en texto.
- *  3. Si hay un aviso, recorta la parte relevante y busca los departamentos elegidos.
+ *  3. Si hay un aviso (la página no dice "No hay aviso meteorológico vigente"), recorta la parte relevante
+ *     y busca los departamentos elegidos.
  *  4. Si hay un aviso nuevo (o la revisión es manual), guarda el texto, mencione o no los departamentos elegidos.
  *     Solo notifica si menciona alguno de los elegidos y la app NO está en primer plano
  *     (si está abierta, el usuario ya ve el aviso).
@@ -68,8 +69,11 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             val body = withContext(Dispatchers.IO) { fetch(PAGE_URL) }
             val fullText = withContext(Dispatchers.Default) { SnapshotStore.htmlToText(body) }
 
-            // ¿La página tiene un aviso activo? Se sabe si aparece el título "Detalle de Aviso Meteorologico"
-            val hasAlert = SnapshotStore.hasMarker(fullText, SAVE_FROM)
+            // ¿La página tiene un aviso activo? Debe aparecer el título "Detalle de Aviso Meteorologico" y
+            // no la frase "No hay aviso meteorológico vigente" (sin aviso la página conserva el título,
+            // el menú y el pie de página; sin esta comprobación se guardaba toda la página como si fuera un aviso)
+            val hasAlert = SnapshotStore.hasMarker(fullText, SAVE_FROM) &&
+                    !SnapshotStore.hasMarker(fullText, NO_ALERT_TEXT)
             // Solo se conserva la parte del aviso: desde el título hasta la lista de departamentos
             val section = if (hasAlert) SnapshotStore.extractSection(fullText, SAVE_FROM, SAVE_UNTIL) else ""
             val departmentsText = if (hasAlert) SnapshotStore.departmentsPart(section) else null
@@ -106,6 +110,8 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             var imageNote = ""
             if (!hasAlert) {
                 if (prefs.lastImage.isNotEmpty() || prefs.lastImageUrl.isNotEmpty()) clearSavedImage(prefs)
+                // Limpia lo que versiones anteriores guardaron por error cuando la página no tenía aviso
+                discardNoAlertSnapshot(prefs)
             } else {
                 val imageUrl = withContext(Dispatchers.Default) { SnapshotStore.findImageUrl(body, PAGE_URL) }
                 if (imageUrl == null) {
@@ -223,6 +229,23 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             }
         }
         throw IllegalStateException("demasiadas redirecciones")
+    }
+
+    /**
+     * Borra el aviso guardado si en realidad es la página sin aviso (versiones anteriores de la app
+     * guardaban la página entera, con el menú y el pie de página, cuando no había ningún aviso).
+     * Un aviso real guardado no se toca.
+     */
+    private fun discardNoAlertSnapshot(prefs: Prefs) {
+        val name = prefs.lastSnapshot
+        if (name.isEmpty()) return
+        val file = SnapshotStore.file(applicationContext, name) ?: return
+        val text = runCatching { file.readText() }.getOrNull() ?: return
+        if (SnapshotStore.hasMarker(text, NO_ALERT_TEXT)) {
+            file.delete()
+            prefs.lastSnapshot = ""
+            prefs.lastSnapshotUrl = ""
+        }
     }
 
     /** Borra la imagen guardada y su dirección, para que la pantalla principal no muestre una imagen vieja. */

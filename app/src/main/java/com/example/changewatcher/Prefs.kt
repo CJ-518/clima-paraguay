@@ -31,6 +31,13 @@ const val SAVE_FROM = "Detalle de Aviso Meteorologico"
 const val SAVE_UNTIL = "Departamentos afectados"
 
 /**
+ * Frase que la página muestra cuando NO hay ningún aviso vigente. Esa página conserva el título
+ * [SAVE_FROM], el menú y el pie de página, por lo que el título solo no basta para saber que hay un aviso:
+ * si esta frase aparece, se considera que no hay aviso y no se guarda nada.
+ */
+const val NO_ALERT_TEXT = "No hay aviso meteorológico vigente"
+
+/**
  * Ajustes que elige el usuario.
  *
  * @param departments ids de los departamentos a vigilar (ver [Departments]).
