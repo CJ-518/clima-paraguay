@@ -253,11 +253,17 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Avisos meteorológicos", style = MaterialTheme.typography.titleLarge)
+            Text("Avisos", style = MaterialTheme.typography.titleLarge)
             IconButton(onClick = { onRefreshClick() }) {
                 Icon(Icons.Filled.Refresh, contentDescription = "Actualizar")
             }
         }
+
+        // Resultado de la última acción o revisión, justo debajo del icono de actualizar
+        Text(status, style = MaterialTheme.typography.bodyMedium)
+
+        // Mensaje de error, si lo hay
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
         // Último aviso guardado, con formato: siempre visible al entrar; se actualiza solo al terminar el refresh
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -348,12 +354,6 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
                 }
             }
         }
-
-        // Resultado de la última acción o revisión
-        Text(status, style = MaterialTheme.typography.bodyMedium)
-
-        // Mensaje de error, si lo hay
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     }
 
     // Imagen ampliada a pantalla completa
