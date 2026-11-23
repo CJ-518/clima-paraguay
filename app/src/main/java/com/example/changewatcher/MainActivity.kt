@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -42,6 +44,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -79,6 +82,9 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 /*
@@ -91,11 +97,16 @@ import java.util.UUID
  *    ver [ImageViewerDialog]), con un icono de actualizar arriba a la derecha (que muestra una animación
  *    mientras se revisa, ver [RefreshButton]) y, a su derecha, el icono de configuración; en la esquina
  *    superior derecha de la tarjeta del aviso van los iconos de abrir la página y copiar el aviso.
+ *    Debajo del título "Avisos", en letra pequeña, se muestra la fecha y hora de la última actualización.
  *  - [SettingsScreen]: monitoreo, departamentos, intervalo y apariencia (ver SettingsScreen.kt).
  *
  * Cada vez que la app pasa a primer plano se lanza una revisión (refresh) y, al terminar,
  * se actualiza el último aviso mostrado. Con la app abierta no se envían notificaciones
  * (ver [Foreground] y [CheckWorker]).
+ *
+ * Al abrir la app también se busca una versión nueva (ver UpdateChecker.kt). Si hay una, se avisa con un
+ * diálogo una sola vez por versión (queda anotada en [Prefs.notifiedUpdateVersion]); si el usuario lo
+ * ignora, no se vuelve a mostrar.
  *
  * Esta pantalla no descarga nada por sí misma: lanza revisiones de [CheckWorker]
  * y lee el resultado desde [Prefs]. El formato del aviso lo aplica [AlertFormatter].
@@ -117,6 +128,21 @@ class MainActivity : ComponentActivity() {
             // Ajustes de apariencia: al cambiarlos en Configuración, los colores se actualizan al instante
             var theme by remember { mutableStateOf(prefs.loadTheme()) }
             var showSettings by rememberSaveable { mutableStateOf(false) }
+            // Versión nueva de la que se avisa con el diálogo (null = no hay nada que mostrar)
+            var updateVersion by rememberSaveable { mutableStateOf<String?>(null) }
+
+            // Al abrir la app se busca una versión nueva. Se avisa una sola vez por versión: se anota
+            // antes de mostrar el diálogo, así que si el usuario lo ignora no vuelve a aparecer.
+            LaunchedEffect(Unit) {
+                if (updateVersion != null) return@LaunchedEffect
+                val result = Updater.checkForUpdate(this@MainActivity)
+                if (result is UpdateResult.Available &&
+                    result.release.versionName != prefs.notifiedUpdateVersion
+                ) {
+                    prefs.notifiedUpdateVersion = result.release.versionName
+                    updateVersion = result.release.versionName
+                }
+            }
 
             MaterialTheme(colorScheme = appColorScheme(theme)) {
                 Surface(Modifier.fillMaxSize()) {
@@ -134,6 +160,24 @@ class MainActivity : ComponentActivity() {
                     } else {
                         WatcherScreen(refreshTick, onOpenSettings = { showSettings = true })
                     }
+                }
+
+                // Aviso de actualización disponible: "Ver" lleva a Configuración, donde se descarga e instala
+                updateVersion?.let { version ->
+                    AlertDialog(
+                        onDismissRequest = { updateVersion = null },
+                        title = { Text("Actualización disponible") },
+                        text = { Text("Hay una versión nueva ($version). Puedes instalarla desde Configuración.") },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                updateVersion = null
+                                showSettings = true
+                            }) { Text("Ver") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { updateVersion = null }) { Text("Ahora no") }
+                        },
+                    )
                 }
             }
         }
@@ -158,7 +202,7 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
     // Departamentos elegidos en Configuración; se usan para resaltarlos en el aviso
     val selected = remember { prefs.load().departments }
 
-    var status by remember { mutableStateOf(prefs.lastStatus) }               // mensaje de estado
+    var lastCheck by remember { mutableStateOf(prefs.lastCheckMillis) }       // hora de la última actualización (0 = ninguna)
     var error by remember { mutableStateOf<String?>(null) }                   // error visible
     var checkId by remember { mutableStateOf<UUID?>(null) }                   // id de la revisión en curso
     var refreshing by remember { mutableStateOf(false) }                      // true = hay una revisión en curso (se muestra la animación)
@@ -219,7 +263,7 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
         WorkManager.getInstance(ctx).getWorkInfoByIdFlow(id).collect { info ->
             if (info != null && info.state.isFinished) {
                 refreshing = false
-                status = prefs.lastStatus
+                lastCheck = prefs.lastCheckMillis
                 snapshotName = prefs.lastSnapshot
                 imageName = prefs.lastImage
             }
@@ -265,25 +309,33 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Barra superior: título y, en la esquina derecha, los iconos de actualizar y de configuración
+        // Barra superior: a la izquierda el título "Avisos" con la fecha y hora de la última actualización
+        // debajo, en letra pequeña; a la derecha, los iconos de actualizar y de configuración.
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Avisos", style = MaterialTheme.typography.titleLarge)
+            Column {
+                Text("Avisos", style = MaterialTheme.typography.titleLarge)
+                // Mientras se revisa no se muestra: el progreso se ve en la animación del botón.
+                if (!refreshing) {
+                    val lastCheckText = if (lastCheck > 0L) {
+                        val formatted = SimpleDateFormat("d MMM, HH:mm", Locale.forLanguageTag("es-PY"))
+                            .format(Date(lastCheck))
+                        "Última actualización: $formatted"
+                    } else {
+                        "Aún no se hizo ninguna actualización"
+                    }
+                    Text(lastCheckText, style = MaterialTheme.typography.bodySmall)
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 RefreshButton(refreshing = refreshing, onClick = { onRefreshClick() })
                 IconButton(onClick = onOpenSettings) {
                     Icon(Icons.Filled.Settings, contentDescription = "Configuración")
                 }
             }
-        }
-
-        // Resultado de la última acción o revisión, justo debajo del icono de actualizar.
-        // Mientras se revisa no se muestra: el progreso se ve en la animación del botón.
-        if (!refreshing) {
-            Text(status, style = MaterialTheme.typography.bodyMedium)
         }
 
         // Mensaje de error, si lo hay
@@ -366,7 +418,7 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
                             val text = AlertFormatter.format(alertText ?: "", selected, alertColors).toString()
                             ctx.getSystemService(ClipboardManager::class.java)
                                 .setPrimaryClip(ClipData.newPlainText("Aviso meteorológico", text))
-                            status = "Aviso copiado al portapapeles"
+                            Toast.makeText(ctx, "Aviso copiado al portapapeles", Toast.LENGTH_SHORT).show()
                         },
                     ) {
                         Icon(CopyIcon, contentDescription = "Copiar aviso")

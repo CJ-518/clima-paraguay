@@ -32,10 +32,10 @@ private enum class Section {
     /** Datos secundarios: tamaño normal. */
     NORMAL,
 
-    /** Fecha y hora de emisión: solo los números de la línea de la etiqueta van en otro color. */
+    /** Fecha y hora de emisión: los números de la línea de la etiqueta van en rojo, negrita y más grandes. */
     EMISSION,
 
-    /** "Fenómeno esperado": es lo más importante, va grande, en negrita y en rojo. */
+    /** "Fenómeno esperado": la etiqueta va con el color de título y el contenido grande y en negrita, con el color normal del texto. */
     PHENOMENON,
 
     /** "Zona de cobertura" y "Departamentos afectados": van un poco más grandes. */
@@ -63,10 +63,11 @@ private data class Line(
  * Colores del texto del aviso (valores ARGB). Se toman del tema del teléfono para que se lean bien
  * tanto en modo claro como oscuro.
  *
- * @param title títulos y etiquetas.
- * @param alert fenómeno esperado.
+ * @param title títulos y etiquetas (incluida la de "Fenómeno esperado").
+ * @param alert números de la fecha y la hora de emisión (rojo).
  * @param selected departamentos elegidos por el usuario.
- * @param emission números de la fecha y la hora de emisión.
+ * @param emission ya no lo usa [AlertFormatter] (los números de la emisión van con [alert]); se conserva
+ *   para no tocar el código que construye esta clase.
  */
 data class AlertColors(
     val title: Int,
@@ -168,10 +169,11 @@ object AlertFormatter {
 
     /**
      * Aplica negritas, tamaños y colores según el tipo de línea y su sección:
-     *  - Fenómeno esperado: etiqueta y contenido en negrita, 1.25x, color de alerta.
+     *  - Fenómeno esperado: la etiqueta en negrita, 1.25x y color de título (como las demás etiquetas);
+     *    el contenido, en negrita y 1.25x, pero con el color normal del texto (no rojo).
      *  - Zona de cobertura y Departamentos afectados: etiqueta en negrita con color de título y contenido en 1.1x.
      *  - Fecha y hora de emisión: la etiqueta como las demás (negrita, color de título) y, en esa misma línea,
-     *    solo los números (22/11/2026, 14:30, ...) con un color distinto, sin cambiar el tamaño.
+     *    solo los números (22/11/2026, 14:30, ...) en rojo, negrita y 1.2x.
      *  - Otras etiquetas: solo la etiqueta en negrita con color de título; el contenido queda normal.
      */
     private fun styleLines(spannable: SpannableString, lines: List<Line>, colors: AlertColors) {
@@ -194,11 +196,11 @@ object AlertFormatter {
         val numberRegex = Regex("\\d+(?:[:/.\\-]\\d+)*")
         val fullText = spannable.toString()
 
-        /** Pinta solo los números que haya entre [start] y [end]; el resto del texto no cambia. */
+        /** Pinta en rojo, negrita y más grandes solo los números que haya entre [start] y [end]; el resto no cambia. */
         fun colorNumbers(start: Int, end: Int) {
             if (end <= start) return
             for (m in numberRegex.findAll(fullText.substring(start, end))) {
-                style(start + m.range.first, start + m.range.last + 1, 1f, colors.emission, false)
+                style(start + m.range.first, start + m.range.last + 1, 1.2f, colors.alert, true)
             }
         }
 
@@ -207,7 +209,12 @@ object AlertFormatter {
                 Kind.LABEL -> {
                     val labelStop = l.start + l.labelEnd // fin de la etiqueta, incluidos los dos puntos
                     when (l.section) {
-                        Section.PHENOMENON -> style(l.start, l.end, 1.25f, colors.alert, true)
+                        Section.PHENOMENON -> {
+                            // La etiqueta con el color de título; el contenido, grande y en negrita pero sin color propio
+                            style(l.start, labelStop, 1.25f, colors.title, true)
+                            style(labelStop, l.end, 1.25f, null, true)
+                        }
+
                         Section.EMISSION -> {
                             style(l.start, labelStop, 1f, colors.title, true)
                             colorNumbers(labelStop, l.end)
@@ -223,9 +230,9 @@ object AlertFormatter {
                 }
 
                 Kind.BODY -> when (l.section) {
-                    Section.PHENOMENON -> style(l.start, l.end, 1.25f, colors.alert, true)
+                    Section.PHENOMENON -> style(l.start, l.end, 1.25f, null, true)
                     Section.KEY -> style(l.start, l.end, 1.1f, null, false)
-                    Section.NORMAL, Section.EMISSION -> Unit // el texto que siga a la fecha y hora queda normal // contenido normal: sin formato especial
+                    Section.NORMAL, Section.EMISSION -> Unit // contenido normal: sin formato especial
                 }
             }
         }

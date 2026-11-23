@@ -112,10 +112,30 @@ class Prefs(context: Context) {
         get() = sp.getString("lastNotifiedHash", "") ?: ""
         set(v) = sp.edit().putString("lastNotifiedHash", v).apply()
 
-    /** Mensaje con el resultado de la última revisión; se muestra en la pantalla principal. */
+    /**
+     * Mensaje con el resultado de la última revisión.
+     * Al guardarlo también se anota la hora (ver [lastCheckMillis]), salvo que la revisión haya fallado,
+     * porque una revisión fallida no cuenta como actualización.
+     */
     var lastStatus: String
         get() = sp.getString("lastStatus", "Aún no se hizo ninguna revisión") ?: "Aún no se hizo ninguna revisión"
-        set(v) = sp.edit().putString("lastStatus", v).apply()
+        set(v) {
+            val editor = sp.edit().putString("lastStatus", v)
+            if (!v.contains("falló")) editor.putLong("lastCheckMillis", System.currentTimeMillis())
+            editor.apply()
+        }
+
+    /** Fecha y hora (en milisegundos) de la última revisión que terminó bien; 0 si todavía no hubo ninguna. */
+    val lastCheckMillis: Long
+        get() = sp.getLong("lastCheckMillis", 0L)
+
+    /**
+     * Versión nueva de la app (por ejemplo "1.6") de la que ya se avisó al usuario al abrir la app.
+     * Sirve para avisar una sola vez por versión: si el usuario ignora el aviso, no se repite.
+     */
+    var notifiedUpdateVersion: String
+        get() = sp.getString("notifiedUpdateVersion", "") ?: ""
+        set(v) = sp.edit().putString("notifiedUpdateVersion", v).apply()
 
     /** Nombre del archivo del último aviso guardado (vacío si todavía no hay ninguno). */
     var lastSnapshot: String
