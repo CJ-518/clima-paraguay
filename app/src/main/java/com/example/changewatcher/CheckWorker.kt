@@ -37,7 +37,7 @@ import java.util.Locale
  *     Solo notifica si menciona alguno de los elegidos y la app NO está en primer plano
  *     (si está abierta, el usuario ya ve el aviso).
  *  5. Busca la imagen que la página muestra con el aviso y la descarga (si es nueva) para verla en la app.
- *     La imagen se borra cuando sale un aviso nuevo o cuando la página ya no tiene aviso.
+ *     El aviso guardado y su imagen se borran cuando sale un aviso nuevo o cuando la página ya no tiene aviso.
  *  6. Guarda un mensaje de estado que la pantalla principal muestra al usuario.
  */
 class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
@@ -110,8 +110,8 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             var imageNote = ""
             if (!hasAlert) {
                 if (prefs.lastImage.isNotEmpty() || prefs.lastImageUrl.isNotEmpty()) clearSavedImage(prefs)
-                // Limpia lo que versiones anteriores guardaron por error cuando la página no tenía aviso
-                discardNoAlertSnapshot(prefs)
+                // Sin aviso vigente: se borra también el texto del último aviso guardado
+                clearSavedAlert(prefs)
             } else {
                 val imageUrl = withContext(Dispatchers.Default) { SnapshotStore.findImageUrl(body, PAGE_URL) }
                 if (imageUrl == null) {
@@ -232,20 +232,16 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
     }
 
     /**
-     * Borra el aviso guardado si en realidad es la página sin aviso (versiones anteriores de la app
-     * guardaban la página entera, con el menú y el pie de página, cuando no había ningún aviso).
-     * Un aviso real guardado no se toca.
+     * Borra el aviso guardado (texto y direcciones) cuando la página ya no tiene ningún aviso vigente,
+     * para que la pantalla principal no siga mostrando un aviso que ya venció.
+     * También limpia lo que versiones anteriores guardaron por error (la página entera sin aviso).
      */
-    private fun discardNoAlertSnapshot(prefs: Prefs) {
+    private fun clearSavedAlert(prefs: Prefs) {
         val name = prefs.lastSnapshot
         if (name.isEmpty()) return
-        val file = SnapshotStore.file(applicationContext, name) ?: return
-        val text = runCatching { file.readText() }.getOrNull() ?: return
-        if (SnapshotStore.hasMarker(text, NO_ALERT_TEXT)) {
-            file.delete()
-            prefs.lastSnapshot = ""
-            prefs.lastSnapshotUrl = ""
-        }
+        SnapshotStore.file(applicationContext, name)?.delete()
+        prefs.lastSnapshot = ""
+        prefs.lastSnapshotUrl = ""
     }
 
     /** Borra la imagen guardada y su dirección, para que la pantalla principal no muestre una imagen vieja. */

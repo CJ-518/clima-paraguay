@@ -349,7 +349,7 @@ fun WatcherScreen(refreshTick: Int, onOpenSettings: () -> Unit) {
             ) {
                 when {
                     snapshotName.isBlank() -> Text(
-                        "Todavía no hay ningún aviso guardado. Se guarda cada aviso nuevo que publica la página.",
+                        "No hay ningún aviso meteorológico vigente. Aquí aparecerá cuando la página publique uno.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
 
