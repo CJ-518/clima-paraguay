@@ -9,7 +9,7 @@ Fuente de datos: <https://www.meteorologia.gov.py/avisos/>
 - Pantalla principal con el último aviso guardado, con formato (título, fenómeno esperado destacado y departamentos elegidos resaltados con otro color de letra).
 - **Imagen del aviso**: si la página publica una imagen junto al aviso (por ejemplo, el mapa de zonas afectadas), la app la descarga y la muestra bajo el texto. La imagen se borra cuando sale un aviso nuevo o cuando la página ya no tiene aviso. Al tocarla se abre a pantalla completa con zoom (dos dedos), desplazamiento y doble toque para restablecer.
 - Al abrir la app se hace una actualización automática y siempre se muestra el último aviso guardado.
-- Se guardan todos los avisos nuevos que publica la página, mencionen o no tus departamentos.
+- Se guardan todos los avisos nuevos que publica la página, mencionen o no tus departamentos. Cuando la página dice que no hay aviso vigente, se borra el aviso guardado y su imagen.
 - Notificación solo cuando el aviso es nuevo o cambió y menciona alguno de los departamentos elegidos, para no repetir alertas.
 - Sin notificaciones mientras la app está abierta: el aviso ya se ve en pantalla.
 - Icono de **Actualizar** en la esquina superior derecha, y botones para **Copiar aviso** (al portapapeles) y **Abrir página** (en el navegador).
